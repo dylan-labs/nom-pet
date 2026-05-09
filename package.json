@@ -1,6 +1,6 @@
 {
   "name": "nom",
-  "version": "0.0.19",
+  "version": "0.0.20",
   "description": "A desktop pet that eats your AI tokens.",
   "main": "out/main/index.js",
   "scripts": {
