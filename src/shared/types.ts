@@ -104,6 +104,14 @@ export interface DialogueContext {
   levelUp?: LevelUpEvent;
 }
 
+export interface VisibleWindowRect {
+  owner: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export interface InstalledPetInfo {
   slug: string;
   displayName: string;

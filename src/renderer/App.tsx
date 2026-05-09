@@ -27,8 +27,8 @@ const WANDER_CHECK_MS = 15 * 1000;
 const WANDER_CHANCE = 0.5;
 const WANDER_COOLDOWN_MS = 20 * 1000;
 const WANDER_DISTANCE_MIN = 60;
-const WANDER_DISTANCE_MAX = 220;
 const WANDER_SPEED_PX_PER_SEC = 60;
+const PERCH_ON_WINDOW_CHANCE = 0.4;  // chance of targeting a real window's top edge instead of free 2D
 
 function pickFrom<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)]!;
@@ -123,26 +123,64 @@ export function App() {
     if (!bounds || petStateRef.current !== 'idle') return;
 
     const { win, workArea } = bounds;
-    const roomLeft = win.x - workArea.x;
-    const roomRight = workArea.x + workArea.width - (win.x + win.w);
-    if (roomLeft < WANDER_DISTANCE_MIN && roomRight < WANDER_DISTANCE_MIN) return;
+    const minX = workArea.x;
+    const maxX = workArea.x + workArea.width  - win.w;
+    const minY = workArea.y;
+    const maxY = workArea.y + workArea.height - win.h;
 
-    let dir: 'left' | 'right';
-    if (roomLeft < WANDER_DISTANCE_MIN) dir = 'right';
-    else if (roomRight < WANDER_DISTANCE_MIN) dir = 'left';
-    else dir = Math.random() < 0.5 ? 'left' : 'right';
+    // Two destination strategies. PERCH_ON_WINDOW_CHANCE of the time we
+    // pick a real on-screen app window and aim for its top edge — that's
+    // how the pet appears to "stand on top of your VS Code". Otherwise we
+    // do a free 2D wander, with a 25% chance of going into the upper 40%
+    // of the screen (so the pet roams everywhere, not just along edges).
+    let targetX: number;
+    let targetY: number;
+    let perchedOnOwner: string | null = null;
 
-    const room = dir === 'right' ? roomRight : roomLeft;
-    const dist = Math.min(
-      room,
-      WANDER_DISTANCE_MIN + Math.random() * (WANDER_DISTANCE_MAX - WANDER_DISTANCE_MIN),
-    );
+    if (Math.random() < PERCH_ON_WINDOW_CHANCE) {
+      const windows = (await window.nom.listVisibleWindows()).filter(
+        (w) => w.w >= win.w * 1.5 && w.y > minY + 40,  // wide enough + not flush against menu bar
+      );
+      if (windows.length > 0) {
+        const target = windows[Math.floor(Math.random() * windows.length)]!;
+        // Land somewhere along the window's top edge, slightly inset from
+        // either end so the pet sits on top of the actual frame.
+        const inset = Math.min(40, target.w * 0.15);
+        targetX = Math.round(
+          target.x + inset + Math.random() * (target.w - 2 * inset - win.w),
+        );
+        targetY = Math.round(target.y - win.h);
+        perchedOnOwner = target.owner;
+      } else {
+        // No suitable window — fall through to free wander
+        const goingHigh = Math.random() < 0.25;
+        const yLo = goingHigh ? minY : minY + (maxY - minY) * 0.4;
+        targetY = yLo + Math.random() * (maxY - yLo);
+        targetX = minX + Math.random() * (maxX - minX);
+      }
+    } else {
+      const goingHigh = Math.random() < 0.25;
+      const yLo = goingHigh ? minY : minY + (maxY - minY) * 0.4;
+      targetY = yLo + Math.random() * (maxY - yLo);
+      targetX = minX + Math.random() * (maxX - minX);
+    }
+
+    // Clamp to work area in case we picked off-screen.
+    targetX = Math.max(minX, Math.min(targetX, maxX));
+    targetY = Math.max(minY, Math.min(targetY, maxY));
+
     const startX = win.x;
-    const targetX = dir === 'right' ? startX + dist : startX - dist;
+    const startY = win.y;
+    const dx = targetX - startX;
+    const dy = targetY - startY;
+    const dist = Math.hypot(dx, dy);
+    if (dist < WANDER_DISTANCE_MIN) return; // skip tiny twitches
+
     const durationMs = (dist / WANDER_SPEED_PX_PER_SEC) * 1000;
     const startTime = performance.now();
 
-    setFacing(dir);
+    if      (dx >  1) setFacing('right');
+    else if (dx < -1) setFacing('left');
     transition('walking');
 
     function step() {
@@ -153,13 +191,29 @@ export function App() {
       const elapsed = performance.now() - startTime;
       const t = Math.min(1, elapsed / durationMs);
       const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-      const x = Math.round(startX + (targetX - startX) * eased);
-      window.nom.moveWindowTo(x, win.y);
+      const x = Math.round(startX + dx * eased);
+      const y = Math.round(startY + dy * eased);
+      window.nom.moveWindowTo(x, y);
       if (t < 1) {
         wanderRafRef.current = requestAnimationFrame(step);
       } else {
         wanderRafRef.current = null;
         transition('idle');
+        // "Perch" feel via lastActivityRef as the next-wander gate.
+        // - Landed on a real window's top edge → 30–60s (deliberate spot)
+        // - Otherwise in upper 40% of screen → 12–30s
+        // - Anywhere else → no extra hold (regular wander cadence)
+        let perchExtraMs = 0;
+        const arrivedY = y - workArea.y;
+        if (perchedOnOwner) {
+          perchExtraMs = 30_000 + Math.random() * 30_000;
+          console.log(`[nom][wander] perched on ${perchedOnOwner}`);
+        } else if (arrivedY < workArea.height * 0.4) {
+          perchExtraMs = 12_000 + Math.random() * 18_000;
+        }
+        if (perchExtraMs > 0) {
+          lastActivityRef.current = Date.now() - WANDER_COOLDOWN_MS + perchExtraMs;
+        }
       }
     }
     wanderRafRef.current = requestAnimationFrame(step);
