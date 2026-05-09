@@ -20,18 +20,20 @@
 
 ## 安装（最终用户）
 
-到 [Releases](../../releases) 下载最新 `.dmg`。**目前仅 macOS**；Windows 版本计划中。
+到 [Releases](../../releases) 下载对应平台的安装包。
+
+### macOS
 
 - **Apple Silicon（M1/M2/M3/M4）**：`nom-x.y.z-arm64.dmg`
 - **Intel Mac**：`nom-x.y.z-x64.dmg`
 
-由于 nom 还没做代码签名，macOS Gatekeeper 会提示"已损坏"。装完跑一次这条命令解除：
+把 `nom.app` 拖进 `/Applications`。首次打开 macOS 会拦截 —— 打开 **系统设置 → 隐私与安全性**，拉到底，点 nom 旁边的 **仍然打开**，弹窗里再确认一次就行，以后双击直接启动。
 
-```bash
-xattr -cr /Applications/nom.app
-```
+### Windows
 
-之后就能正常打开。（后续版本会做签名 + 公证。）
+- `nom-x.y.z-setup.exe` —— NSIS 安装向导，x64
+
+双击 setup，走完向导。桌面会有快捷方式，开始菜单也能找到。
 
 ## 换宠物皮肤
 

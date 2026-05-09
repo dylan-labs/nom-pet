@@ -20,18 +20,20 @@ A desktop pet that lives on your screen and **eats the AI tokens you burn** — 
 
 ## Install (end users)
 
-Grab the latest `.dmg` from [Releases](../../releases). **macOS only for now**; Windows builds are planned.
+Grab the latest installer from [Releases](../../releases).
+
+### macOS
 
 - **Apple Silicon (M1/M2/M3/M4)**: `nom-x.y.z-arm64.dmg`
 - **Intel Mac**: `nom-x.y.z-x64.dmg`
 
-Because nom isn't code-signed yet, macOS Gatekeeper will say it's "damaged". Fix it once after install:
+Drag `nom.app` into `/Applications`. First launch macOS will block it — go to **System Settings → Privacy & Security**, scroll to the bottom and click **Open Anyway** next to nom. Confirm in the dialog and it'll launch from then on.
 
-```bash
-xattr -cr /Applications/nom.app
-```
+### Windows
 
-Then open normally. (Future versions will be signed + notarized.)
+- `nom-x.y.z-setup.exe` — NSIS installer wizard, x64
+
+Double-click the setup, walk through the wizard. You'll get a desktop shortcut and a Start Menu entry.
 
 ## Use a custom pet skin
 
