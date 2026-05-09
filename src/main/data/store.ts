@@ -26,6 +26,7 @@ export interface NomState {
 const DEFAULT_SETTINGS: NomSettings = {
   wanderEnabled: true,
   activePetSlug: null,
+  llm: null,
 };
 
 const DEFAULT_STATE: NomState = {
@@ -90,6 +91,16 @@ export class Store {
             activePetSlug: typeof parsed.settings?.activePetSlug === 'string'
               ? parsed.settings.activePetSlug
               : DEFAULT_SETTINGS.activePetSlug,
+            llm: parsed.settings?.llm && typeof parsed.settings.llm === 'object'
+              ? {
+                  enabled: !!parsed.settings.llm.enabled,
+                  endpoint: String(parsed.settings.llm.endpoint ?? ''),
+                  model: String(parsed.settings.llm.model ?? ''),
+                  apiKey: parsed.settings.llm.apiKey
+                    ? String(parsed.settings.llm.apiKey)
+                    : null,
+                }
+              : DEFAULT_SETTINGS.llm,
           },
         };
       }
@@ -139,6 +150,23 @@ export class Store {
 
   setActivePetSlug(slug: string | null): NomSettings {
     this.state.settings.activePetSlug = slug;
+    this.scheduleWrite();
+    return this.getSettings();
+  }
+
+  setLlmEnabled(enabled: boolean): NomSettings {
+    if (this.state.settings.llm) {
+      this.state.settings.llm.enabled = enabled;
+    } else {
+      // First-time toggle without prior config: stub something the user
+      // can complete later via "打开配置文件".
+      this.state.settings.llm = {
+        enabled,
+        endpoint: '',
+        model: '',
+        apiKey: null,
+      };
+    }
     this.scheduleWrite();
     return this.getSettings();
   }

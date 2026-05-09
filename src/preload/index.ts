@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { InstalledPetInfo, LoadedPet, NomSettings, SessionEvent, StateSnapshot, ThinkingEvent, TokensEvent } from '../shared/types';
+import type { DialogueContext, InstalledPetInfo, LoadedPet, NomSettings, SessionEvent, StateSnapshot, ThinkingEvent, TokensEvent } from '../shared/types';
 
 const api = {
   version: '0.0.11',
@@ -67,6 +67,9 @@ const api = {
     return () => {
       ipcRenderer.removeListener('nom:pet:changed', listener);
     };
+  },
+  getDialogueLine(ctx: DialogueContext): Promise<string | null> {
+    return ipcRenderer.invoke('nom:dialogue:line', ctx) as Promise<string | null>;
   },
 };
 

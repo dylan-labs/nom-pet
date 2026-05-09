@@ -47,9 +47,32 @@ export interface ThinkingEvent {
   timestamp: number;
 }
 
+export interface LlmSettings {
+  enabled: boolean;
+  endpoint: string;       // OpenAI-compatible chat-completions URL
+  model: string;
+  apiKey: string | null;  // null for endpoints that don't need auth
+}
+
 export interface NomSettings {
   wanderEnabled: boolean;
   activePetSlug: string | null;
+  llm: LlmSettings | null;
+}
+
+export type DialogueTrigger =
+  | 'session-start'
+  | 'milestone'
+  | 'eating'
+  | 'idle-click'
+  | 'wake';
+
+export interface DialogueContext {
+  trigger: DialogueTrigger;
+  todayTokens?: number;
+  delta?: number;
+  amount?: number;
+  hour: number;        // 0–23
 }
 
 export interface InstalledPetInfo {

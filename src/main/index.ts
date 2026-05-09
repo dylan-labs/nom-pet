@@ -1,10 +1,13 @@
-import { app, BrowserWindow, screen, ipcMain, Menu, globalShortcut } from 'electron';
+import { app, BrowserWindow, screen, ipcMain, Menu, shell, globalShortcut } from 'electron';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
+import os from 'node:os';
 import { ClaudeSource } from './data/claude-source';
 import { Store, type WindowPosition } from './data/store';
 import { scanTodayHistory } from './data/today-scan';
 import { loadUserPet, listInstalledPets } from './data/pet-loader';
-import type { NomSettings, SessionEvent, StateSnapshot, ThinkingEvent, TokensEvent } from '../shared/types';
+import { generateLine } from './data/llm';
+import type { DialogueContext, NomSettings, SessionEvent, StateSnapshot, ThinkingEvent, TokensEvent } from '../shared/types';
 
 const WIN_SIZE = 200;
 const MOVE_DEBOUNCE_MS = 400;
@@ -144,7 +147,30 @@ function createPetWindow() {
           petWindow?.webContents.send('nom:settings:changed', next);
         },
       },
+      {
+        label: 'AI 台词',
+        type: 'checkbox',
+        checked: !!settings.llm?.enabled,
+        click: (item) => {
+          const next = store.setLlmEnabled(item.checked);
+          petWindow?.webContents.send('nom:settings:changed', next);
+        },
+      },
       { label: '选择宠物', submenu: petSubmenu },
+      {
+        label: '打开配置文件',
+        click: () => {
+          const filePath = path.join(os.homedir(), '.nom', 'state.json');
+          // `shell.openPath` silently no-ops when the user has no default
+          // app bound to .json. Force TextEdit on macOS — it ships with
+          // every Mac and always works.
+          if (process.platform === 'darwin') {
+            spawn('open', ['-e', filePath], { detached: true, stdio: 'ignore' }).unref();
+          } else {
+            shell.showItemInFolder(filePath);
+          }
+        },
+      },
       { type: 'separator' },
       { label: '关闭宠物', click: () => app.quit() },
     ]);
@@ -181,6 +207,11 @@ async function main() {
   ipcMain.handle('nom:pet:get', () => loadUserPet(store.getSettings().activePetSlug));
   ipcMain.handle('nom:pets:list', () => listInstalledPets());
   ipcMain.handle('nom:settings:get', (): NomSettings => store.getSettings());
+  ipcMain.handle('nom:dialogue:line', async (_, ctx: DialogueContext): Promise<string | null> => {
+    const llm = store.getSettings().llm;
+    if (!llm) return null;
+    return generateLine(llm, ctx);
+  });
 
   let dragOrigin: { mouseX: number; mouseY: number; winX: number; winY: number } | null = null;
   ipcMain.on('nom:drag:begin', (_, { x, y }: { x: number; y: number }) => {

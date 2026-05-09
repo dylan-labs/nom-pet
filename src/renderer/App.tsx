@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { NomApi } from '../preload';
+import type { DialogueContext } from '../shared/types';
 import { Sprite, type PetState } from './pet/Sprite';
 import greetings from './dialogue/greeting.json';
 import idleLines from './dialogue/idle.json';
@@ -56,13 +57,11 @@ function formatMilestone(amount: number): string {
 }
 
 export function App() {
-  const [bubble, setBubble] = useState<string | null>(null);
+  const [bubble, setBubble] = useState<{ header: string; body: string } | null>(null);
   const [today, setToday] = useState(0);
   const [, setCumulative] = useState(0);
   const [petState, setPetState] = useState<PetState>('idle');
   const [facing, setFacing] = useState<'left' | 'right'>('right');
-  const [thinkingCount, setThinkingCount] = useState(0);
-  const thinkingSetRef = useRef(new Set<string>());
 
   const petStateRef = useRef<PetState>('idle');
   const lastActivityRef = useRef<number>(Date.now());
@@ -77,10 +76,28 @@ export function App() {
     setPetState(next);
   }
 
-  function showBubble(line: string, ms = 2500) {
-    setBubble(line);
+  function showBubble(header: string, body: string, ms = 3000) {
+    setBubble({ header, body });
     if (bubbleTimerRef.current) clearTimeout(bubbleTimerRef.current);
     bubbleTimerRef.current = setTimeout(() => setBubble(null), ms);
+  }
+
+  /**
+   * Try the LLM-backed line first; fall back to the supplied template if
+   * LLM is off / unreachable / returned junk. Fire-and-forget from event
+   * handlers — `void smartBubble(...)`.
+   */
+  async function smartBubble(
+    header: string,
+    ctx: Omit<DialogueContext, 'hour'>,
+    fallback: string,
+    ms = 3000,
+  ) {
+    const line = await window.nom.getDialogueLine({
+      ...ctx,
+      hour: new Date().getHours(),
+    } as DialogueContext);
+    showBubble(header, line ?? fallback, ms);
   }
 
   function recordActivity() {
@@ -195,14 +212,18 @@ export function App() {
   function onPetClick() {
     if (petStateRef.current === 'sleeping') {
       transition('idle');
-      showBubble(pickFrom(wakeLines), 2000);
+      void smartBubble('醒来', { trigger: 'wake' }, pickFrom(wakeLines), 2500);
     } else {
       // Briefly show talking frame while bubble is up.
       transition('talking');
       setTimeout(() => {
         if (petStateRef.current === 'talking') transition('idle');
       }, 1200);
-      showBubble(pickFrom(idleLines));
+      void smartBubble(
+        '聊天',
+        { trigger: 'idle-click', todayTokens: today },
+        pickFrom(idleLines),
+      );
     }
   }
 
@@ -212,17 +233,8 @@ export function App() {
       setCumulative(s.cumulative);
       lastMilestoneRef.current = Math.floor(s.today / MILESTONE_STEP) * MILESTONE_STEP;
     });
-    const t = setTimeout(() => showBubble(pickGreeting(), 3000), GREETING_DELAY_MS);
+    const t = setTimeout(() => showBubble('打招呼', pickGreeting(), 3000), GREETING_DELAY_MS);
     return () => clearTimeout(t);
-  }, []);
-
-  useEffect(() => {
-    return window.nom.onThinking((e) => {
-      const set = thinkingSetRef.current;
-      if (e.kind === 'start') set.add(e.sessionId);
-      else set.delete(e.sessionId);
-      setThinkingCount(set.size);
-    });
   }, []);
 
   useEffect(() => {
@@ -234,7 +246,7 @@ export function App() {
         transition('idle');
       }
       recordActivity();
-      showBubble(pickFrom(sessionLines), 2500);
+      void smartBubble('新会话', { trigger: 'session-start' }, pickFrom(sessionLines), 2800);
     });
   }, []);
 
@@ -255,11 +267,21 @@ export function App() {
       if (milestoneJustHit) lastMilestoneRef.current = newMilestone;
 
       if (wasSleeping) {
-        showBubble(pickFrom(wakeLines), 2500);
+        void smartBubble('醒来', { trigger: 'wake' }, pickFrom(wakeLines), 2500);
       } else if (milestoneJustHit) {
-        showBubble(formatMilestone(newMilestone), 2500);
+        void smartBubble(
+          '里程碑',
+          { trigger: 'milestone', amount: newMilestone },
+          formatMilestone(newMilestone),
+          3000,
+        );
       } else if (Math.random() < 0.35) {
-        showBubble(pickFrom(eatingLines), 1800);
+        void smartBubble(
+          '在吃',
+          { trigger: 'eating', delta: e.delta, todayTokens: e.snapshot.today },
+          pickFrom(eatingLines),
+          2000,
+        );
       }
     });
     return unsub;
@@ -270,7 +292,7 @@ export function App() {
       if (petStateRef.current !== 'idle') return;
       if (Date.now() - lastActivityRef.current >= SLEEP_AFTER_MS) {
         transition('sleeping');
-        showBubble(pickFrom(sleepLines), 2500);
+        showBubble('打盹', pickFrom(sleepLines), 2500);
       }
     }, SLEEP_CHECK_MS);
     return () => clearInterval(id);
@@ -316,20 +338,17 @@ export function App() {
 
   return (
     <div className="container">
-      {bubble && <div className="bubble">{bubble}</div>}
+      {bubble && (
+        <div className="bubble">
+          <div className="bubble-header">{bubble.header}</div>
+          <div className="bubble-body">{bubble.body}</div>
+        </div>
+      )}
       <div
         className={`pet pet--${petState}`}
         onMouseDown={onPetMouseDown}
       >
         <Sprite state={petState} facing={facing} />
-        {thinkingCount > 0 && (
-          <div className="thinking">
-            <span className="thinking-tag">Claude</span>
-            <span className="thinking-text">
-              思考中<span className="thinking-dots"><span>.</span><span>.</span><span>.</span></span>
-            </span>
-          </div>
-        )}
       </div>
       {today > 0 && (
         <div className="counter">today · {formatTokens(today)}</div>
