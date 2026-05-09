@@ -3,11 +3,11 @@ import path from 'node:path';
 import { ClaudeSource } from './data/claude-source';
 import { CodexSource } from './data/codex-source';
 import { Store, type WindowPosition } from './data/store';
-import { scanTodayHistory } from './data/today-scan';
-import { scanCodexTodayHistory } from './data/codex-today-scan';
+import { scanRecentHistory } from './data/today-scan';
+import { scanCodexRecentHistory } from './data/codex-today-scan';
 import { loadUserPet, listInstalledPets } from './data/pet-loader';
 import { generateLine } from './data/llm';
-import type { DialogueContext, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SessionEvent, SourceId, StateSnapshot, ThinkingEvent, TokensEvent } from '../shared/types';
+import type { DailyReport, DialogueContext, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SessionEvent, SourceId, StateSnapshot, ThinkingEvent, TokensEvent } from '../shared/types';
 
 const WIN_SIZE = 200;
 const MOVE_DEBOUNCE_MS = 400;
@@ -258,17 +258,26 @@ async function main() {
 
   try {
     const [claude, codex] = await Promise.all([
-      scanTodayHistory(),
-      scanCodexTodayHistory(),
+      scanRecentHistory(7),
+      scanCodexRecentHistory(7),
     ]);
-    const total = claude.tokens + codex.tokens;
-    store.setTodayBaseline(total);
+    // Merge per-day from both sources, then seed daily buckets. Math.max
+    // inside setDayBaseline preserves any live-tracked counts already in
+    // memory for those days (shouldn't happen on a fresh launch but is
+    // the safe default).
+    const allDays = new Set<string>([...Object.keys(claude.perDay), ...Object.keys(codex.perDay)]);
+    let totalSeeded = 0;
+    for (const day of allDays) {
+      const combined = (claude.perDay[day] ?? 0) + (codex.perDay[day] ?? 0);
+      store.setDayBaseline(day, combined);
+      totalSeeded += combined;
+    }
     console.log(
-      `[nom] today baseline: ${total} tokens ` +
-      `(claude=${claude.tokens}/${claude.filesScanned}f, codex=${codex.tokens}/${codex.filesScanned}f)`
+      `[nom] history scan seeded ${allDays.size} days, total ${totalSeeded} tokens ` +
+      `(claude=${claude.filesScanned}f, codex=${codex.filesScanned}f)`
     );
   } catch (err) {
-    console.error('[nom] today scan failed:', err);
+    console.error('[nom] history scan failed:', err);
   }
 
   ipcMain.handle('nom:state:get', (): StateSnapshot => store.snapshot());
@@ -307,6 +316,11 @@ async function main() {
     if (!llm) return null;
     return generateLine(llm, ctx);
   });
+  ipcMain.handle('nom:report:get', (): { pending: boolean; report: DailyReport | null } => ({
+    pending: store.isDailyReportPending(),
+    report: store.computeDailyReport(),
+  }));
+  ipcMain.handle('nom:report:markShown', (): void => store.markDailyReportShown());
 
   let dragOrigin: { mouseX: number; mouseY: number; winX: number; winY: number } | null = null;
   ipcMain.on('nom:drag:begin', (_, { x, y }: { x: number; y: number }) => {

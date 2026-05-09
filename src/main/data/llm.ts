@@ -1,8 +1,9 @@
 import type { DialogueContext, LlmSettings } from '../../shared/types';
 
 const REQUEST_TIMEOUT_MS = 8000;
-const MAX_TOKENS = 60;
-const MAX_LINE_CHARS = 26;
+const MAX_TOKENS = 80;
+const MAX_LINE_CHARS_DEFAULT = 26;
+const MAX_LINE_CHARS_REPORT = 60;
 
 const SYSTEM_PROMPT = `你是 nom，一只住在用户桌面上的虚拟宠物，吃用户消耗的 AI tokens 为食。
 
@@ -48,11 +49,25 @@ function userPromptFor(ctx: DialogueContext): string {
       }
       return `情境：你刚升级，从 ${up.from.badge} 升到了 ${up.to.badge}。说一句小确幸/嘚瑟的台词。`;
     }
+    case 'daily-report': {
+      const r = ctx.report;
+      if (!r) return '情境：每日小结，说一句吐槽。';
+      const fmt = (n: number) => n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` :
+        n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` :
+        n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(n);
+      const vsYday = r.dayBeforeTokens > 0
+        ? `比前天 ${fmt(r.dayBeforeTokens)} ${r.yesterdayTokens > r.dayBeforeTokens ? '多' : '少'} ${Math.round(Math.abs(r.yesterdayTokens - r.dayBeforeTokens) / r.dayBeforeTokens * 100)}%`
+        : '前天没数据';
+      const vsAvg = r.weekAvgTokens > 0
+        ? `周均 ${fmt(r.weekAvgTokens)}`
+        : '没有周均参考';
+      return `情境：早安！要给用户做昨天的"每日小结"。数据：昨天他喂了你 ${fmt(r.yesterdayTokens)} token（${vsYday}，${vsAvg}）。说一句**有数据 + 有态度**的总结，可以吐槽 / 感慨 / 提醒，2 行内（最多 30 字），气泡里要装得下。${levelHint}`;
+    }
   }
 }
 
 /** Strip reasoning-model thinking traces and any wrapping noise. */
-function cleanLine(raw: string): string {
+function cleanLine(raw: string, maxChars: number): string {
   let s = raw;
   // Some models wrap thinking in <think>...</think>; some emit only the
   // closing tag. Either way, anything before the LAST </think> is debris.
@@ -65,7 +80,7 @@ function cleanLine(raw: string): string {
   s = s.split(/[\r\n]+/)[0]!.trim();
   // Hard cap so a runaway response can't blow the bubble layout.
   // Append … on truncation so the reader can see the line was cut.
-  if (s.length > MAX_LINE_CHARS) s = s.slice(0, MAX_LINE_CHARS - 1).trimEnd() + '…';
+  if (s.length > maxChars) s = s.slice(0, maxChars - 1).trimEnd() + '…';
   return s;
 }
 
@@ -108,7 +123,10 @@ export async function generateLine(
     const raw = data.choices?.[0]?.message?.content;
     if (typeof raw !== 'string' || !raw.trim()) return null;
 
-    const cleaned = cleanLine(raw);
+    const maxChars = ctx.trigger === 'daily-report'
+      ? MAX_LINE_CHARS_REPORT
+      : MAX_LINE_CHARS_DEFAULT;
+    const cleaned = cleanLine(raw, maxChars);
     return cleaned || null;
   } catch (err) {
     console.warn('[nom][llm] error:', (err as Error).message);

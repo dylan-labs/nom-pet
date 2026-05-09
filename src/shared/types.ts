@@ -92,7 +92,15 @@ export type DialogueTrigger =
   | 'eating'
   | 'idle-click'
   | 'wake'
-  | 'level-up';
+  | 'level-up'
+  | 'daily-report';
+
+export interface DailyReport {
+  yesterdayKey: string;        // e.g. "2026-05-08"
+  yesterdayTokens: number;
+  dayBeforeTokens: number;
+  weekAvgTokens: number;
+}
 
 export interface DialogueContext {
   trigger: DialogueTrigger;
@@ -102,6 +110,7 @@ export interface DialogueContext {
   hour: number;          // 0–23
   level?: LevelInfo;     // current pet level (passed when relevant for flavour)
   levelUp?: LevelUpEvent;
+  report?: DailyReport;  // populated for trigger === 'daily-report'
 }
 
 export interface InstalledPetInfo {

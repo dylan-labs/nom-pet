@@ -27,6 +27,18 @@ function todayStartMs(now = Date.now()): number {
   return d.getTime();
 }
 
+function dayStartMs(daysAgo: number): number {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - daysAgo);
+  return d.getTime();
+}
+
+function dayKeyFromMs(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 async function listJsonl(dir: string): Promise<string[]> {
   const out: string[] = [];
   let items: Dirent[];
@@ -68,15 +80,25 @@ function computeWeighted(u: Usage): number {
  * launching nom mid-day shows accurate totals from both sources.
  */
 export async function scanCodexTodayHistory(): Promise<ScanResult> {
-  const startMs = todayStartMs();
-  let total = 0;
+  const recent = await scanCodexRecentHistory(1);
+  const todayK = dayKeyFromMs(todayStartMs());
+  return { tokens: recent.perDay[todayK] ?? 0, filesScanned: recent.filesScanned };
+}
+
+/** Per-day weighted Codex tokens for the last `days` calendar days (incl. today). */
+export async function scanCodexRecentHistory(days: number): Promise<{
+  perDay: Record<string, number>;
+  filesScanned: number;
+}> {
+  const oldestMs = dayStartMs(days - 1);
+  const perDay: Record<string, number> = {};
   let scanned = 0;
 
   const files = await listJsonl(ROOT);
   for (const file of files) {
     try {
       const stat = await fs.stat(file);
-      if (stat.mtimeMs < startMs) continue;
+      if (stat.mtimeMs < oldestMs) continue;
     } catch {
       continue;
     }
@@ -100,12 +122,13 @@ export async function scanCodexTodayHistory(): Promise<ScanResult> {
       if (event?.type !== 'event_msg') continue;
       if (event?.payload?.type !== 'token_count') continue;
       const ts = Date.parse(event.timestamp);
-      if (!Number.isFinite(ts) || ts < startMs) continue;
+      if (!Number.isFinite(ts) || ts < oldestMs) continue;
       const u = event.payload?.info?.last_token_usage;
       if (!u) continue;
-      total += computeWeighted(u);
+      const dayKey = dayKeyFromMs(ts);
+      perDay[dayKey] = (perDay[dayKey] ?? 0) + computeWeighted(u);
     }
   }
 
-  return { tokens: total, filesScanned: scanned };
+  return { perDay, filesScanned: scanned };
 }

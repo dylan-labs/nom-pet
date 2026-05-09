@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { DialogueContext, InstalledPetInfo, LevelInfo, LevelUpEvent, LlmSettings, LoadedPet, NomSettings, SessionEvent, StateSnapshot, ThinkingEvent, TokensEvent } from '../shared/types';
+import type { DailyReport, DialogueContext, InstalledPetInfo, LevelInfo, LevelUpEvent, LlmSettings, LoadedPet, NomSettings, SessionEvent, StateSnapshot, ThinkingEvent, TokensEvent } from '../shared/types';
 
 const api = {
   version: '0.0.11',
@@ -92,6 +92,12 @@ const api = {
   },
   testLlm(llm: LlmSettings): Promise<{ ok: boolean; ms: number; error?: string; sample?: string }> {
     return ipcRenderer.invoke('nom:llm:test', llm);
+  },
+  getDailyReport(): Promise<{ pending: boolean; report: DailyReport | null }> {
+    return ipcRenderer.invoke('nom:report:get') as Promise<{ pending: boolean; report: DailyReport | null }>;
+  },
+  markDailyReportShown(): Promise<void> {
+    return ipcRenderer.invoke('nom:report:markShown') as Promise<void>;
   },
 };
 

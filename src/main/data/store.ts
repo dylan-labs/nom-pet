@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import type { LevelInfo, LevelUpEvent, LlmSettings, NomSettings, StateSnapshot } from '../../shared/types';
+import type { DailyReport, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, StateSnapshot } from '../../shared/types';
 import { computeLevel } from './levels';
 import { computeSeal, verifySeal } from './seal';
 
@@ -29,6 +29,12 @@ export interface NomState {
    * historical level-ups on first launch after upgrading.
    */
   lastLevelIndex: number;
+  /**
+   * Date (YYYY-MM-DD) of the most recent day on which the daily report
+   * bubble was shown. Lets us only fire it once per day, and only when
+   * the user opens nom on a day they haven't yet seen yesterday's recap.
+   */
+  lastDailyReportShownOn: string | null;
   startedAt: number;
   settings: NomSettings;
 }
@@ -48,6 +54,7 @@ const DEFAULT_STATE: NomState = {
   windowPosition: null,
   tokens: { cumulative: 0, daily: {} },
   lastLevelIndex: -1,
+  lastDailyReportShownOn: null,
   startedAt: 0,
   settings: { ...DEFAULT_SETTINGS },
 };
@@ -57,6 +64,13 @@ const WRITE_DEBOUNCE_MS = 1000;
 
 export function todayKey(now = Date.now()): string {
   const d = new Date(now);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** Date key N days before today (0 = today, 1 = yesterday, etc). */
+function dayKeyOffset(daysAgo: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
@@ -121,6 +135,9 @@ export class Store {
             daily: typeof parsed.tokens?.daily === 'object' && parsed.tokens.daily ? parsed.tokens.daily : {},
           },
           lastLevelIndex: claimed.lastLevelIndex,
+          lastDailyReportShownOn: typeof parsed.lastDailyReportShownOn === 'string'
+            ? parsed.lastDailyReportShownOn
+            : null,
           startedAt: Number(parsed.startedAt) || Date.now(),
           settings: {
             wanderEnabled: typeof parsed.settings?.wanderEnabled === 'boolean'
@@ -211,6 +228,45 @@ export class Store {
     return computeLevel(this.state.tokens.cumulative);
   }
 
+  /**
+   * Yesterday's recap. Returns null if there's no data for yesterday
+   * (user wasn't active / weekend / holiday) — we'd rather stay quiet
+   * than fabricate a "you fed me 0 tokens, sad" message.
+   */
+  computeDailyReport(): DailyReport | null {
+    const yesterdayKey = dayKeyOffset(1);
+    const yesterdayTokens = this.state.tokens.daily[yesterdayKey] ?? 0;
+    if (yesterdayTokens <= 0) return null;
+
+    const dayBeforeTokens = this.state.tokens.daily[dayKeyOffset(2)] ?? 0;
+
+    // 7-day average — only count days that actually have data, so a
+    // brand-new user with one day of history doesn't see "vs avg ÷7".
+    let sum = 0;
+    let count = 0;
+    for (let i = 1; i <= 7; i++) {
+      const v = this.state.tokens.daily[dayKeyOffset(i)];
+      if (typeof v === 'number') {
+        sum += v;
+        count++;
+      }
+    }
+    const weekAvgTokens = count > 0 ? Math.round(sum / count) : 0;
+
+    return { yesterdayKey, yesterdayTokens, dayBeforeTokens, weekAvgTokens };
+  }
+
+  /** Has today's daily report already been shown? */
+  isDailyReportPending(): boolean {
+    return this.state.lastDailyReportShownOn !== todayKey();
+  }
+
+  /** Mark today's report as shown so we don't fire it again. */
+  markDailyReportShown(): void {
+    this.state.lastDailyReportShownOn = todayKey();
+    this.scheduleWrite();
+  }
+
   setWindowPosition(pos: WindowPosition): void {
     this.state.windowPosition = pos;
     this.scheduleWrite();
@@ -267,9 +323,19 @@ export class Store {
    * so we never lose tokens already counted live this session.
    */
   setTodayBaseline(amount: number): StateSnapshot {
+    return this.setDayBaseline(todayKey(), amount);
+  }
+
+  /**
+   * Same as setTodayBaseline but for an arbitrary date key. Used by the
+   * recent-history scan that backfills the daily map on startup so the
+   * daily-recap bubble has yesterday's data even on first launch after
+   * install.
+   */
+  setDayBaseline(dateKey: string, amount: number): StateSnapshot {
     if (amount > 0) {
-      const key = todayKey();
-      this.state.tokens.daily[key] = Math.max(this.state.tokens.daily[key] ?? 0, amount);
+      this.state.tokens.daily[dateKey] = Math.max(this.state.tokens.daily[dateKey] ?? 0, amount);
+      this.pruneDaily();
       this.scheduleWrite();
     }
     return this.snapshot();

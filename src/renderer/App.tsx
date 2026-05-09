@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { NomApi } from '../preload';
-import type { DialogueContext, LevelInfo } from '../shared/types';
+import type { DailyReport, DialogueContext, LevelInfo } from '../shared/types';
 import { Sprite, type PetState } from './pet/Sprite';
 import greetings from './dialogue/greeting.json';
 import idleLines from './dialogue/idle.json';
@@ -53,6 +53,19 @@ function pickGreeting(): string {
 
 function formatMilestone(amount: number): string {
   return pickFrom(milestoneTemplates).replace('{amount}', formatTokens(amount));
+}
+
+function formatReportFallback(r: DailyReport): string {
+  const parts = [`昨日 ${formatTokens(r.yesterdayTokens)}`];
+  if (r.dayBeforeTokens > 0) {
+    const pct = Math.round((r.yesterdayTokens - r.dayBeforeTokens) / r.dayBeforeTokens * 100);
+    const arrow = pct >= 0 ? '↑' : '↓';
+    parts.push(`vs 前日 ${arrow}${Math.abs(pct)}%`);
+  }
+  if (r.weekAvgTokens > 0) {
+    parts.push(`周均 ${formatTokens(r.weekAvgTokens)}`);
+  }
+  return parts.join(' · ');
 }
 
 export function App() {
@@ -251,8 +264,30 @@ export function App() {
     });
     void window.nom.getLevel().then(setLevel);
     const t = setTimeout(() => showBubble('打招呼', pickGreeting(), 3000), GREETING_DELAY_MS);
-    return () => clearTimeout(t);
+
+    // Daily-report check: ~5 seconds after greeting (lets the user settle in
+    // before we hit them with a recap). If the report is pending and there's
+    // actually data for yesterday, show it via smartBubble (so LLM-enabled
+    // users get a sassy line, others get a templated fallback).
+    const reportTimer = setTimeout(() => { void maybeShowDailyReport(); }, GREETING_DELAY_MS + 5000);
+
+    return () => {
+      clearTimeout(t);
+      clearTimeout(reportTimer);
+    };
   }, []);
+
+  async function maybeShowDailyReport() {
+    const { pending, report } = await window.nom.getDailyReport();
+    if (!pending || !report) return;
+    void window.nom.markDailyReportShown();
+    void smartBubble(
+      '每日小结',
+      { trigger: 'daily-report', report } as Omit<DialogueContext, 'hour'>,
+      formatReportFallback(report),
+      8000,
+    );
+  }
 
   useEffect(() => {
     return window.nom.onLevelUp((e) => {

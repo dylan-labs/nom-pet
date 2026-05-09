@@ -17,6 +17,18 @@ function todayStartMs(now = Date.now()): number {
   return d.getTime();
 }
 
+function dayStartMs(daysAgo: number): number {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - daysAgo);
+  return d.getTime();
+}
+
+function dayKeyFromMs(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 async function listJsonl(dir: string): Promise<string[]> {
   const out: string[] = [];
   let items: Dirent[];
@@ -44,15 +56,30 @@ async function listJsonl(dir: string): Promise<string[]> {
  * Cumulative is intentionally NOT updated by this — it tracks live-only.
  */
 export async function scanTodayHistory(): Promise<ScanResult> {
-  const startMs = todayStartMs();
-  let total = 0;
+  const recent = await scanRecentHistory(1);
+  const todayK = dayKeyFromMs(todayStartMs());
+  return { tokens: recent.perDay[todayK] ?? 0, filesScanned: recent.filesScanned };
+}
+
+/**
+ * Scan the last `days` calendar days (including today) and return per-day
+ * weighted token totals. Lets us seed `tokens.daily` with history so the
+ * daily-recap bubble has data to compare against on the user's first launch
+ * after install.
+ */
+export async function scanRecentHistory(days: number): Promise<{
+  perDay: Record<string, number>;
+  filesScanned: number;
+}> {
+  const oldestMs = dayStartMs(days - 1);
+  const perDay: Record<string, number> = {};
   let scanned = 0;
 
   const files = await listJsonl(ROOT);
   for (const file of files) {
     try {
       const stat = await fs.stat(file);
-      if (stat.mtimeMs < startMs) continue;
+      if (stat.mtimeMs < oldestMs) continue;
     } catch {
       continue;
     }
@@ -75,12 +102,13 @@ export async function scanTodayHistory(): Promise<ScanResult> {
       }
       if (event?.type !== 'assistant') continue;
       const ts = Date.parse(event.timestamp);
-      if (!Number.isFinite(ts) || ts < startMs) continue;
+      if (!Number.isFinite(ts) || ts < oldestMs) continue;
       const u = event.message?.usage;
       if (!u) continue;
-      total += computeWeightedTokens(u);
+      const dayKey = dayKeyFromMs(ts);
+      perDay[dayKey] = (perDay[dayKey] ?? 0) + computeWeightedTokens(u);
     }
   }
 
-  return { tokens: total, filesScanned: scanned };
+  return { perDay, filesScanned: scanned };
 }
