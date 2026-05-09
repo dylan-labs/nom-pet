@@ -1,0 +1,38 @@
+appId: com.nom.pet
+productName: nom
+directories:
+  output: release
+  buildResources: build-resources
+afterPack: ./scripts/sign-adhoc.cjs
+files:
+  - out/**/*
+  - package.json
+asarUnpack:
+  - resources/**
+
+mac:
+  category: public.app-category.utilities
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  identity: "-"
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-setup.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
