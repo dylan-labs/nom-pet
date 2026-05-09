@@ -2,13 +2,13 @@
 
 # nom
 
-一只住在桌面上的宠物，**吃掉你消耗的 AI token** —— 当前从 Claude Code 取食（Codex / Cursor 适配在路上）。
+一只住在桌面上的宠物，**吃掉你消耗的 AI token** —— 当前从 Claude Code 和 Codex CLI 取食（Cursor 适配在路上）。
 
 > **隐私优先**：nom 不向任何地方上传你的数据。它只读用量数字（不读 prompt/response），所有状态存在你机器上的 `~/.nom/`，随时可以 `rm -rf ~/.nom` 清空。
 
 ## 功能
 
-- **实时吃 token** —— 监听 `~/.claude/projects/*.jsonl`，Claude 一出 token 就嚼。
+- **实时吃多源 token** —— 同时监听 `~/.claude/projects/*.jsonl`（Claude Code）和 `~/.codex/sessions/**/*.jsonl`（Codex CLI），每个源右键菜单可独立开关。
 - **新会话问候** —— 你打开新 Claude Code 会话，宠物会醒过来打招呼。
 - **自动游走** —— 没事自己在桌面溜达两步，像个真实的桌面伙伴（右键可关）。
 - **支持换皮** —— 用 `npx petdex install <slug>` 装 [petdex](https://github.com/crafter-station/petdex) 包，再右键 → **选择宠物** 秒切，不用重启。
@@ -50,6 +50,7 @@ npx petdex install boba       # 或 doraemon、goku-blue……
 |---|---|
 | ☑ 允许游走 | 自动游走开/关 |
 | ☐ AI 台词 | LLM 动态台词开/关（见下面）|
+| 数据源 → | 各个源独立开关（Claude Code、Codex）|
 | 选择宠物 → | 在已装的 petdex 皮肤之间切换 |
 | 打开配置文件 | 打开 `~/.nom/state.json` 手动编辑 |
 | 关闭宠物 | 退出 |

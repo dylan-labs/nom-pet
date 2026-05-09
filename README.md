@@ -2,13 +2,13 @@
 
 # nom
 
-A desktop pet that lives on your screen and **eats the AI tokens you burn** — currently feeds on Claude Code (Codex / Cursor support coming).
+A desktop pet that lives on your screen and **eats the AI tokens you burn** — feeds on Claude Code and Codex CLI today (Cursor support coming).
 
 > **Privacy first**: nom never sends your token data anywhere. It only reads usage numbers (not prompts/responses) from local transcripts, stores everything in `~/.nom/` on your machine, and you can `rm -rf ~/.nom` at any time.
 
 ## Features
 
-- **Eats tokens in real time** — tails `~/.claude/projects/*.jsonl`, animates whenever Claude generates output.
+- **Eats tokens in real time, from multiple agents** — tails `~/.claude/projects/*.jsonl` (Claude Code) and `~/.codex/sessions/**/*.jsonl` (Codex CLI). Toggle each source independently from the right-click menu.
 - **Greets new sessions** — wakes up and bubbles a hello when you open a new Claude Code session.
 - **Wanders on its own** — strolls around the screen between activity, like a real desktop companion (toggle off via right-click).
 - **Skin support** — install any [petdex](https://github.com/crafter-station/petdex) pack with `npx petdex install <slug>`, then right-click → **选择宠物** to switch on the fly. No restart.
@@ -50,6 +50,7 @@ Right-click the pet → **选择宠物** → pick your new skin. Pets live in `~
 |---|---|
 | ☑ 允许游走 | Toggle auto-wander on/off |
 | ☐ AI 台词 | Toggle LLM-powered dialogue (see below) |
+| 数据源 → | Per-source on/off (Claude Code, Codex) |
 | 选择宠物 → | Switch among installed petdex skins |
 | 打开配置文件 | Open `~/.nom/state.json` for manual edits |
 | 关闭宠物 | Quit |
