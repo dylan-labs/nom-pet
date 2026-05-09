@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { NomApi } from '../preload';
-import type { DialogueContext } from '../shared/types';
+import type { DialogueContext, LevelInfo } from '../shared/types';
 import { Sprite, type PetState } from './pet/Sprite';
 import greetings from './dialogue/greeting.json';
 import idleLines from './dialogue/idle.json';
@@ -57,11 +57,12 @@ function formatMilestone(amount: number): string {
 }
 
 export function App() {
-  const [bubble, setBubble] = useState<{ header: string; body: string } | null>(null);
+  const [bubble, setBubble] = useState<{ header: string; body: string; gold?: boolean } | null>(null);
   const [today, setToday] = useState(0);
   const [, setCumulative] = useState(0);
   const [petState, setPetState] = useState<PetState>('idle');
   const [facing, setFacing] = useState<'left' | 'right'>('right');
+  const [level, setLevel] = useState<LevelInfo | null>(null);
 
   const petStateRef = useRef<PetState>('idle');
   const lastActivityRef = useRef<number>(Date.now());
@@ -76,8 +77,8 @@ export function App() {
     setPetState(next);
   }
 
-  function showBubble(header: string, body: string, ms = 3000) {
-    setBubble({ header, body });
+  function showBubble(header: string, body: string, ms = 3000, opts?: { gold?: boolean }) {
+    setBubble({ header, body, gold: opts?.gold });
     if (bubbleTimerRef.current) clearTimeout(bubbleTimerRef.current);
     bubbleTimerRef.current = setTimeout(() => setBubble(null), ms);
   }
@@ -92,12 +93,13 @@ export function App() {
     ctx: Omit<DialogueContext, 'hour'>,
     fallback: string,
     ms = 3000,
+    opts?: { gold?: boolean },
   ) {
     const line = await window.nom.getDialogueLine({
       ...ctx,
       hour: new Date().getHours(),
     } as DialogueContext);
-    showBubble(header, line ?? fallback, ms);
+    showBubble(header, line ?? fallback, ms, opts);
   }
 
   function recordActivity() {
@@ -212,7 +214,7 @@ export function App() {
   function onPetClick() {
     if (petStateRef.current === 'sleeping') {
       transition('idle');
-      void smartBubble('醒来', { trigger: 'wake' }, pickFrom(wakeLines), 2500);
+      void smartBubble('醒来', { trigger: 'wake', level: level ?? undefined }, pickFrom(wakeLines), 2500);
     } else {
       // Briefly show talking frame while bubble is up.
       transition('talking');
@@ -221,7 +223,7 @@ export function App() {
       }, 1200);
       void smartBubble(
         '聊天',
-        { trigger: 'idle-click', todayTokens: today },
+        { trigger: 'idle-click', todayTokens: today, level: level ?? undefined },
         pickFrom(idleLines),
       );
     }
@@ -233,8 +235,29 @@ export function App() {
       setCumulative(s.cumulative);
       lastMilestoneRef.current = Math.floor(s.today / MILESTONE_STEP) * MILESTONE_STEP;
     });
+    void window.nom.getLevel().then(setLevel);
     const t = setTimeout(() => showBubble('打招呼', pickGreeting(), 3000), GREETING_DELAY_MS);
     return () => clearTimeout(t);
+  }, []);
+
+  useEffect(() => {
+    return window.nom.onLevelUp((e) => {
+      setLevel(e.to);
+      cancelWander();
+      transition('talking');
+      setTimeout(() => {
+        if (petStateRef.current === 'talking') transition('idle');
+      }, 1500);
+      const header = e.tierJumped ? `🎉 进入 ${e.to.tier}` : '升级';
+      const fallback = e.tierJumped
+        ? `从 ${e.from.tier} 升到 ${e.to.tier} 啦！`
+        : `升到 ${e.to.badge} 啦`;
+      void smartBubble(header, {
+        trigger: 'level-up',
+        level: e.to,
+        levelUp: e,
+      } as Omit<DialogueContext, 'hour'>, fallback, e.tierJumped ? 5000 : 3500, { gold: e.tierJumped });
+    });
   }, []);
 
   useEffect(() => {
@@ -339,7 +362,7 @@ export function App() {
   return (
     <div className="container">
       {bubble && (
-        <div className="bubble">
+        <div className={`bubble${bubble.gold ? ' bubble--gold' : ''}`}>
           <div className="bubble-header">{bubble.header}</div>
           <div className="bubble-body">{bubble.body}</div>
         </div>
@@ -350,9 +373,30 @@ export function App() {
       >
         <Sprite state={petState} facing={facing} />
       </div>
-      {today > 0 && (
-        <div className="counter">today · {formatTokens(today)}</div>
-      )}
+      <div className="status">
+        {level && (
+          <div className={`badge badge--${tierClass(level.tier)}`} title={`累计 ${formatTokens(level.threshold)}+`}>
+            <span className="badge-text">{level.badge}</span>
+            {level.nextThreshold !== null && (
+              <span className="badge-progress" style={{ width: `${Math.round(level.progress * 100)}%` }} />
+            )}
+          </div>
+        )}
+        {today > 0 && <div className="counter">today · {formatTokens(today)}</div>}
+      </div>
     </div>
   );
+}
+
+function tierClass(tier: string): string {
+  switch (tier) {
+    case '新手': return 'rookie';
+    case '学徒': return 'apprentice';
+    case '行家': return 'expert';
+    case '大师': return 'master';
+    case '宗师': return 'grandmaster';
+    case '传说': return 'legend';
+    case '战神': return 'godlike';
+    default:     return 'rookie';
+  }
 }

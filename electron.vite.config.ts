@@ -30,7 +30,10 @@ export default defineConfig({
     },
     build: {
       rollupOptions: {
-        input: 'src/renderer/index.html',
+        input: {
+          index: 'src/renderer/index.html',
+          settings: 'src/renderer/settings.html',
+        },
       },
     },
     plugins: [react()],

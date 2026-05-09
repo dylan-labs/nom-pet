@@ -49,6 +49,24 @@ export interface ThinkingEvent {
   timestamp: number;
 }
 
+export interface LevelInfo {
+  index: number;
+  tier: string;
+  subLevel: string | null;
+  badge: string;
+  threshold: number;
+  nextThreshold: number | null;
+  progress: number;
+  isTierStart: boolean;
+}
+
+export interface LevelUpEvent {
+  from: LevelInfo;
+  to: LevelInfo;
+  tierJumped: boolean;       // crossed into a new big tier (新手 → 学徒 etc)
+  cumulative: number;
+}
+
 export interface SourceSettings {
   claudeCode: boolean;
   codex: boolean;
@@ -73,14 +91,17 @@ export type DialogueTrigger =
   | 'milestone'
   | 'eating'
   | 'idle-click'
-  | 'wake';
+  | 'wake'
+  | 'level-up';
 
 export interface DialogueContext {
   trigger: DialogueTrigger;
   todayTokens?: number;
   delta?: number;
   amount?: number;
-  hour: number;        // 0–23
+  hour: number;          // 0–23
+  level?: LevelInfo;     // current pet level (passed when relevant for flavour)
+  levelUp?: LevelUpEvent;
 }
 
 export interface InstalledPetInfo {

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { DialogueContext, InstalledPetInfo, LoadedPet, NomSettings, SessionEvent, StateSnapshot, ThinkingEvent, TokensEvent } from '../shared/types';
+import type { DialogueContext, InstalledPetInfo, LevelInfo, LevelUpEvent, LlmSettings, LoadedPet, NomSettings, SessionEvent, StateSnapshot, ThinkingEvent, TokensEvent } from '../shared/types';
 
 const api = {
   version: '0.0.11',
@@ -70,6 +70,28 @@ const api = {
   },
   getDialogueLine(ctx: DialogueContext): Promise<string | null> {
     return ipcRenderer.invoke('nom:dialogue:line', ctx) as Promise<string | null>;
+  },
+  getLevel(): Promise<LevelInfo> {
+    return ipcRenderer.invoke('nom:level:get') as Promise<LevelInfo>;
+  },
+  onLevelUp(callback: (event: LevelUpEvent) => void): () => void {
+    const listener = (_: Electron.IpcRendererEvent, event: LevelUpEvent) => callback(event);
+    ipcRenderer.on('nom:level:up', listener);
+    return () => {
+      ipcRenderer.removeListener('nom:level:up', listener);
+    };
+  },
+  setWanderEnabled(enabled: boolean): Promise<NomSettings> {
+    return ipcRenderer.invoke('nom:settings:setWander', enabled) as Promise<NomSettings>;
+  },
+  setSourceEnabled(source: 'claudeCode' | 'codex', enabled: boolean): Promise<NomSettings> {
+    return ipcRenderer.invoke('nom:settings:setSource', { source, enabled }) as Promise<NomSettings>;
+  },
+  setLlmSettings(llm: LlmSettings | null): Promise<NomSettings> {
+    return ipcRenderer.invoke('nom:settings:setLlm', llm) as Promise<NomSettings>;
+  },
+  testLlm(llm: LlmSettings): Promise<{ ok: boolean; ms: number; error?: string; sample?: string }> {
+    return ipcRenderer.invoke('nom:llm:test', llm);
   },
 };
 

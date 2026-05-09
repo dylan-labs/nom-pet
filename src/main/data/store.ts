@@ -2,7 +2,9 @@ import fs from 'node:fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import type { NomSettings, StateSnapshot } from '../../shared/types';
+import type { LevelInfo, LevelUpEvent, LlmSettings, NomSettings, StateSnapshot } from '../../shared/types';
+import { computeLevel } from './levels';
+import { computeSeal, verifySeal } from './seal';
 
 export interface WindowPosition {
   x: number;
@@ -10,7 +12,7 @@ export interface WindowPosition {
   displayId?: number;
 }
 
-const SCHEMA_VERSION = 2; // bumped at 0.0.7 — token formula changed (weighted), old counts incompatible.
+const SCHEMA_VERSION = 3; // bumped at 0.0.20 — added HMAC seal on cumulative + lastLevelIndex.
 
 export interface NomState {
   schemaVersion: number;
@@ -19,6 +21,14 @@ export interface NomState {
     cumulative: number;
     daily: Record<string, number>;
   };
+  /**
+   * Last level index already shown to the user. Lets us detect level-ups
+   * across token events without re-firing for cumulative we'd already
+   * acknowledged. -1 means "uninitialised" — we'll seed it from the
+   * current cumulative on first read so the user doesn't get a barrage of
+   * historical level-ups on first launch after upgrading.
+   */
+  lastLevelIndex: number;
   startedAt: number;
   settings: NomSettings;
 }
@@ -37,6 +47,7 @@ const DEFAULT_STATE: NomState = {
   schemaVersion: SCHEMA_VERSION,
   windowPosition: null,
   tokens: { cumulative: 0, daily: {} },
+  lastLevelIndex: -1,
   startedAt: 0,
   settings: { ...DEFAULT_SETTINGS },
 };
@@ -69,9 +80,13 @@ export class Store {
     try {
       const text = await fs.readFile(this.file, 'utf8');
       const parsed = JSON.parse(text);
-      if (parsed.schemaVersion !== SCHEMA_VERSION) {
-        // Older schema → token counts incompatible. Reset counts but keep
-        // window position (it has nothing to do with the formula).
+
+      // Schema 1 → 2 was a token-formula change (weighted), old counts truly
+      // incompatible. Reset cumulative for that path.
+      // Schema 2 → 3 only added HMAC sealing — preserve the existing counts;
+      // we'll seal them on the very next write so going forward they're
+      // protected.
+      if (parsed.schemaVersion < 2) {
         this.state = {
           ...clone(DEFAULT_STATE),
           windowPosition: parsed.windowPosition ?? null,
@@ -79,14 +94,33 @@ export class Store {
         };
         this.scheduleWrite();
         console.log(`[nom] state migrated from schema ${parsed.schemaVersion} → ${SCHEMA_VERSION} (token counts reset)`);
-      } else {
+      } else if (parsed.schemaVersion === 2 || parsed.schemaVersion === SCHEMA_VERSION) {
+        const claimed = {
+          cumulative: Math.max(0, Number(parsed.tokens?.cumulative ?? 0)),
+          lastLevelIndex: typeof parsed.lastLevelIndex === 'number' ? parsed.lastLevelIndex : -1,
+        };
+        if (parsed.schemaVersion === SCHEMA_VERSION) {
+          // Authentic v3 — verify the seal. Mismatch = tampered → reset.
+          const sealOk = verifySeal(claimed, parsed.seal);
+          if (!sealOk && (claimed.cumulative > 0 || claimed.lastLevelIndex > 0)) {
+            console.warn('[nom] state seal mismatch — possible tamper. Resetting cumulative + level.');
+            claimed.cumulative = 0;
+            claimed.lastLevelIndex = -1;
+          }
+        } else {
+          // v2 → v3 amnesty: pre-seal era, accept current value as legit.
+          // Will be sealed on next write (scheduleWrite below).
+          console.log('[nom] migrating state v2 → v3 (cumulative preserved, future writes sealed)');
+          this.scheduleWrite();
+        }
         this.state = {
           schemaVersion: SCHEMA_VERSION,
           windowPosition: parsed.windowPosition ?? null,
           tokens: {
-            cumulative: Math.max(0, Number(parsed.tokens?.cumulative ?? 0)),
+            cumulative: claimed.cumulative,
             daily: typeof parsed.tokens?.daily === 'object' && parsed.tokens.daily ? parsed.tokens.daily : {},
           },
+          lastLevelIndex: claimed.lastLevelIndex,
           startedAt: Number(parsed.startedAt) || Date.now(),
           settings: {
             wanderEnabled: typeof parsed.settings?.wanderEnabled === 'boolean'
@@ -134,15 +168,47 @@ export class Store {
     return this.state.windowPosition;
   }
 
-  addTokens(delta: number): StateSnapshot {
+  /**
+   * Apply a token delta. Returns the post-update snapshot AND a level-up
+   * event if the cumulative crossed one or more level thresholds.
+   * Caller (main/index.ts) fans the level-up event out to the renderer.
+   */
+  addTokens(delta: number): { snapshot: StateSnapshot; levelUp: LevelUpEvent | null } {
+    let levelUp: LevelUpEvent | null = null;
     if (delta > 0) {
+      // Lazy seed: if we've never recorded a level (fresh upgrade from a
+      // pre-leveling install), align lastLevelIndex with the current
+      // cumulative BEFORE applying delta so we don't fire a barrage of
+      // historical level-ups for tokens already eaten.
+      if (this.state.lastLevelIndex < 0) {
+        this.state.lastLevelIndex = computeLevel(this.state.tokens.cumulative).index;
+      }
+      const before = this.state.lastLevelIndex;
+
       const key = todayKey();
       this.state.tokens.cumulative += delta;
       this.state.tokens.daily[key] = (this.state.tokens.daily[key] ?? 0) + delta;
+
+      const after = computeLevel(this.state.tokens.cumulative);
+      if (after.index > before) {
+        const fromLevel = computeLevel(this.state.tokens.cumulative - delta);
+        levelUp = {
+          from: fromLevel,
+          to: after,
+          tierJumped: fromLevel.tier !== after.tier,
+          cumulative: this.state.tokens.cumulative,
+        };
+        this.state.lastLevelIndex = after.index;
+      }
+
       this.pruneDaily();
       this.scheduleWrite();
     }
-    return this.snapshot();
+    return { snapshot: this.snapshot(), levelUp };
+  }
+
+  getLevel(): LevelInfo {
+    return computeLevel(this.state.tokens.cumulative);
   }
 
   setWindowPosition(pos: WindowPosition): void {
@@ -189,6 +255,12 @@ export class Store {
     return this.getSettings();
   }
 
+  setLlmSettings(llm: LlmSettings | null): NomSettings {
+    this.state.settings.llm = llm;
+    this.scheduleWrite();
+    return this.getSettings();
+  }
+
   /**
    * Apply a today-baseline from history scan. Only updates today's slot
    * (does NOT touch cumulative — cumulative is live-only). Uses Math.max
@@ -231,7 +303,15 @@ export class Store {
 
   private async write(): Promise<void> {
     const tmp = `${this.file}.tmp`;
-    const data = JSON.stringify(this.state, null, 2);
+    // Seal cumulative + lastLevelIndex so naive edits to state.json get
+    // caught by verifySeal() on next load. The seal lives at the top level
+    // alongside the state fields so it's obvious in the file.
+    const seal = computeSeal({
+      cumulative: this.state.tokens.cumulative,
+      lastLevelIndex: this.state.lastLevelIndex,
+    });
+    const payload = { ...this.state, seal };
+    const data = JSON.stringify(payload, null, 2);
     try {
       await fs.writeFile(tmp, data, 'utf8');
       await fs.rename(tmp, this.file);

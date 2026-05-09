@@ -123,20 +123,75 @@ html, body {
   to   { transform: translateY(0)   scale(1);    opacity: 1; }
 }
 
-.counter {
+.status {
   position: absolute;
   bottom: 4px;
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  flex-direction: row;
+  gap: 4px;
+  align-items: center;
   pointer-events: none;
+  white-space: nowrap;
+  z-index: 1;
+}
+
+.counter {
   font-size: 10px;
   font-weight: 600;
   color: white;
   background: rgba(0, 0, 0, 0.55);
   padding: 2px 8px;
   border-radius: 8px;
-  white-space: nowrap;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.3px;
+}
+
+.badge {
+  position: relative;
+  font-size: 10px;
+  font-weight: 700;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 8px;
+  letter-spacing: 0.4px;
+  overflow: hidden;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.18);
+}
+
+.badge-text {
+  position: relative;
+  z-index: 1;
+}
+
+.badge-progress {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.3);
+  z-index: 0;
+  transition: width 0.5s ease;
+}
+
+.badge--rookie       { background: #6b7280; }  /* 新手  灰 */
+.badge--apprentice   { background: #16a34a; }  /* 学徒  绿 */
+.badge--expert       { background: #2563eb; }  /* 行家  蓝 */
+.badge--master       { background: #9333ea; }  /* 大师  紫 */
+.badge--grandmaster  { background: #ea580c; }  /* 宗师  橙 */
+.badge--legend       { background: #dc2626; }  /* 传说  红 */
+.badge--godlike      {
+  background: linear-gradient(135deg, #f59e0b, #fbbf24, #f59e0b);
+  color: #1f2937;
+}
+
+.bubble--gold {
+  background: linear-gradient(135deg, #fffbeb, #fef3c7);
+  box-shadow: 0 6px 20px rgba(245, 158, 11, 0.4), 0 0 0 2px #f59e0b;
+}
+
+.bubble--gold .bubble-header {
+  color: #92400e;
 }
 

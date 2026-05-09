@@ -24,17 +24,30 @@ function userPromptFor(ctx: DialogueContext): string {
     time < 18 ? '下午' :
     time < 22 ? '傍晚' : '深夜';
 
+  // Level affects tone: 新手期谦虚撒娇；越往上越嚣张/老资格。
+  const levelHint = ctx.level
+    ? ` 你的当前段位是 ${ctx.level.badge}，说话语气要符合身份（新手期可怜兮兮 / 学徒慢慢长大 / 行家有底气 / 大师以上开始装 / 战神就装死神）。`
+    : '';
+
   switch (ctx.trigger) {
     case 'session-start':
-      return `情境：用户刚打开了一个新的 Claude Code 会话，时间是${slot}。说一句迎接他的台词。`;
+      return `情境：用户刚打开了一个新的 Claude Code 会话，时间是${slot}。说一句迎接他的台词。${levelHint}`;
     case 'milestone':
-      return `情境：用户今天累计已经让你吃了 ${ctx.amount} 个 token，这是个里程碑数字。说一句庆祝/吐槽的台词。`;
+      return `情境：用户今天累计已经让你吃了 ${ctx.amount} 个 token，这是个里程碑数字。说一句庆祝/吐槽的台词。${levelHint}`;
     case 'eating':
-      return `情境：用户正在用 Claude，刚喂了你 ${ctx.delta} 个 token。说一句吃东西的小感想。`;
+      return `情境：用户正在用 Claude，刚喂了你 ${ctx.delta} 个 token。说一句吃东西的小感想。${levelHint}`;
     case 'idle-click':
-      return `情境：用户闲着戳了你一下（不是来喂你东西的，就是手贱）。时间${slot}。说一句撒娇/讨好/吐槽的话，**绝对不要提 token / 喂食 / 数字**，单纯回应被戳。`;
+      return `情境：用户闲着戳了你一下（不是来喂你东西的，就是手贱）。时间${slot}。说一句撒娇/讨好/吐槽的话，**绝对不要提 token / 喂食 / 数字**，单纯回应被戳。${levelHint}`;
     case 'wake':
-      return `情境：你刚睡着，用户回来叫醒了你。说一句迷糊的、刚醒的台词。`;
+      return `情境：你刚睡着，用户回来叫醒了你。说一句迷糊的、刚醒的台词。${levelHint}`;
+    case 'level-up': {
+      const up = ctx.levelUp;
+      if (!up) return '情境：你升级了，说一句开心/嚣张的话。';
+      if (up.tierJumped) {
+        return `情境：你刚刚从 ${up.from.tier} 段位跨入了 ${up.to.tier} 段位（具体到 ${up.to.badge}）！这是大跨越，**仪式感要强**：说一句吹牛/装逼/感慨的话。`;
+      }
+      return `情境：你刚升级，从 ${up.from.badge} 升到了 ${up.to.badge}。说一句小确幸/嘚瑟的台词。`;
+    }
   }
 }
 

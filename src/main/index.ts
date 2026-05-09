@@ -1,7 +1,5 @@
-import { app, BrowserWindow, screen, ipcMain, Menu, shell, globalShortcut } from 'electron';
-import { spawn } from 'node:child_process';
+import { app, BrowserWindow, screen, ipcMain, Menu, globalShortcut } from 'electron';
 import path from 'node:path';
-import os from 'node:os';
 import { ClaudeSource } from './data/claude-source';
 import { CodexSource } from './data/codex-source';
 import { Store, type WindowPosition } from './data/store';
@@ -9,13 +7,14 @@ import { scanTodayHistory } from './data/today-scan';
 import { scanCodexTodayHistory } from './data/codex-today-scan';
 import { loadUserPet, listInstalledPets } from './data/pet-loader';
 import { generateLine } from './data/llm';
-import type { DialogueContext, NomSettings, SessionEvent, SourceId, StateSnapshot, ThinkingEvent, TokensEvent } from '../shared/types';
+import type { DialogueContext, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SessionEvent, SourceId, StateSnapshot, ThinkingEvent, TokensEvent } from '../shared/types';
 
 const WIN_SIZE = 200;
 const MOVE_DEBOUNCE_MS = 400;
 const SUMMON_SHORTCUT = 'CommandOrControl+Alt+N';
 
 let petWindow: BrowserWindow | null = null;
+let settingsWindow: BrowserWindow | null = null;
 const claudeSource = new ClaudeSource();
 const codexSource = new CodexSource();
 const store = new Store();
@@ -196,21 +195,8 @@ function createPetWindow() {
         ],
       },
       { label: '选择宠物', submenu: petSubmenu },
-      {
-        label: '打开配置文件',
-        click: () => {
-          const filePath = path.join(os.homedir(), '.nom', 'state.json');
-          // `shell.openPath` silently no-ops when the user has no default
-          // app bound to .json. Force TextEdit on macOS — it ships with
-          // every Mac and always works.
-          if (process.platform === 'darwin') {
-            spawn('open', ['-e', filePath], { detached: true, stdio: 'ignore' }).unref();
-          } else {
-            shell.showItemInFolder(filePath);
-          }
-        },
-      },
       { type: 'separator' },
+      { label: '设置…', accelerator: 'CmdOrCtrl+,', click: () => openSettingsWindow() },
       { label: '关闭宠物', click: () => app.quit() },
     ]);
     menu.popup({ window: petWindow });
@@ -220,6 +206,41 @@ function createPetWindow() {
     petWindow.loadURL(process.env['ELECTRON_RENDERER_URL']);
   } else {
     petWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+  }
+}
+
+function openSettingsWindow(): void {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    settingsWindow.show();
+    settingsWindow.focus();
+    return;
+  }
+
+  settingsWindow = new BrowserWindow({
+    width: 480,
+    height: 620,
+    title: 'nom · 设置',
+    backgroundColor: '#f5f5f7',
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  settingsWindow.once('ready-to-show', () => settingsWindow?.show());
+  settingsWindow.on('closed', () => { settingsWindow = null; });
+
+  if (process.env['ELECTRON_RENDERER_URL']) {
+    settingsWindow.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/settings.html`);
+  } else {
+    settingsWindow.loadFile(path.join(__dirname, '../renderer/settings.html'));
   }
 }
 
@@ -250,9 +271,36 @@ async function main() {
   }
 
   ipcMain.handle('nom:state:get', (): StateSnapshot => store.snapshot());
+  ipcMain.handle('nom:level:get', (): LevelInfo => store.getLevel());
   ipcMain.handle('nom:pet:get', () => loadUserPet(store.getSettings().activePetSlug));
   ipcMain.handle('nom:pets:list', () => listInstalledPets());
   ipcMain.handle('nom:settings:get', (): NomSettings => store.getSettings());
+  ipcMain.handle('nom:settings:setLlm', (_, llm: LlmSettings | null): NomSettings => {
+    const next = store.setLlmSettings(llm);
+    petWindow?.webContents.send('nom:settings:changed', next);
+    return next;
+  });
+  ipcMain.handle('nom:settings:setWander', (_, enabled: boolean): NomSettings => {
+    const next = store.setWanderEnabled(enabled);
+    petWindow?.webContents.send('nom:settings:changed', next);
+    return next;
+  });
+  ipcMain.handle('nom:settings:setSource', (_, args: { source: 'claudeCode' | 'codex'; enabled: boolean }): NomSettings => {
+    const next = store.setSourceEnabled(args.source, args.enabled);
+    reconcileSources();
+    petWindow?.webContents.send('nom:settings:changed', next);
+    return next;
+  });
+  ipcMain.handle('nom:llm:test', async (_, llm: LlmSettings): Promise<{ ok: boolean; ms: number; error?: string; sample?: string }> => {
+    const start = Date.now();
+    const result = await generateLine(
+      { ...llm, enabled: true },
+      { trigger: 'idle-click', hour: new Date().getHours() },
+    );
+    const ms = Date.now() - start;
+    if (result == null) return { ok: false, ms, error: '调用失败：检查 endpoint / model / API key 是否正确' };
+    return { ok: true, ms, sample: result };
+  });
   ipcMain.handle('nom:dialogue:line', async (_, ctx: DialogueContext): Promise<string | null> => {
     const llm = store.getSettings().llm;
     if (!llm) return null;
@@ -310,8 +358,11 @@ async function main() {
   // care which source it came from (dialogue stays unified per user
   // request); only the running token counter and animation react.
   function onTokens(event: { delta: number; source: SourceId; timestamp: number }) {
-    const snapshot = store.addTokens(event.delta);
+    const { snapshot, levelUp } = store.addTokens(event.delta);
     petWindow?.webContents.send('nom:tokens', { ...event, snapshot } satisfies TokensEvent);
+    if (levelUp) {
+      petWindow?.webContents.send('nom:level:up', levelUp);
+    }
   }
   function onSession(event: SessionEvent) {
     petWindow?.webContents.send('nom:session', event);
