@@ -9,12 +9,11 @@
 ## 功能
 
 - **实时吃 token** —— 监听 `~/.claude/projects/*.jsonl`，Claude 一出 token 就嚼。
-- **知道 Claude 在思考** —— 你按下回车的瞬间到回复落地，宠物头顶都挂着 `Claude · 思考中…` 卡片。
 - **新会话问候** —— 你打开新 Claude Code 会话，宠物会醒过来打招呼。
 - **自动游走** —— 没事自己在桌面溜达两步，像个真实的桌面伙伴（右键可关）。
 - **支持换皮** —— 用 `npx petdex install <slug>` 装 [petdex](https://github.com/crafter-station/petdex) 包，再右键 → **选择宠物** 秒切，不用重启。
 - **闲置睡觉、回来唤醒** —— 30 分钟没动静就打盹。
-- **会说话** —— 里程碑、时段问候、吃东西吐槽，全部来自本地台词文件。**绝不调用任何 LLM。**
+- **聊天卡气泡** —— 新会话、里程碑、点击聊天、随机吃东西评论，都用聊天卡片样式（粗体标题 + 灰色正文）。默认本地预置台词；**可选**接 LLM 让台词动态、上下文感知（见下面）。
 - **拖动** 任意位置即可移动；窗口位置重启不丢。
 - **多屏友好** —— `⌘⌥N` 一键召回到鼠标所在屏幕。
 
@@ -50,10 +49,31 @@ npx petdex install boba       # 或 doraemon、goku-blue……
 | 选项 | 作用 |
 |---|---|
 | ☑ 允许游走 | 自动游走开/关 |
+| ☐ AI 台词 | LLM 动态台词开/关（见下面）|
 | 选择宠物 → | 在已装的 petdex 皮肤之间切换 |
+| 打开配置文件 | 打开 `~/.nom/state.json` 手动编辑 |
 | 关闭宠物 | 退出 |
 
 另外有全局快捷键：`⌘⌥N`（Mac）/ `Ctrl+Alt+N`（Win），把宠物召回到当前屏幕。
+
+## 可选：AI 动态台词
+
+默认 nom 用本地预置台词文件 —— 完全离线、可重复、零网络。如果你想要上下文感知的台词（比如 *"凌晨两点了还在用 Claude，你这个 prompt 写得有点暴躁啊"*），可以接任何 **OpenAI 协议的 chat-completions 端点** —— 你自己的 Anthropic key、本机 Ollama、自建模型……只要对得上 OpenAI 接口就行。
+
+1. 右键宠物 → 勾上 **AI 台词**
+2. 右键 → **打开配置文件**（会打开 `~/.nom/state.json`）
+3. 编辑 `llm` 那一节：
+   ```json
+   "llm": {
+     "enabled": true,
+     "endpoint": "https://api.anthropic.com/v1/...",
+     "model": "claude-haiku-4-5-20251001",
+     "apiKey": "sk-..."
+   }
+   ```
+4. 退出 nom 重新启动。
+
+**隐私契约**：只发元数据（触发类型、时段、token 数字）出去，**绝不发**你的 prompt 和 Claude 的回复。任何 LLM 调用失败 / 超时 → 静默回退本地台词，宠物照常工作。
 
 ## 开发
 
@@ -73,8 +93,8 @@ npm run pack:win     # 打 .exe → release/
 
 nom 在隐私上是偏执的：
 
-1. **零网络请求**。`package.json` 里没有任何 HTTP 客户端依赖，自己可以验证。
-2. **不读 prompt/response 内容**。只解析 JSONL 里的 `usage.{input,output,cache_*}_tokens` 数字。
+1. **默认零网络请求**。基础体验完全离线 —— 全部从你本机的 Claude Code 文件读。唯一可能联网的是上面那个可选的 AI 台词功能，**只有你主动开启并配置 endpoint 才会发请求**。
+2. **从不读取或发送 prompt/response 内容**。nom 只解析 JSONL 里的 `usage.{input,output,cache_*}_tokens` 数字。开 AI 台词后，发给 LLM 端点的也只有元数据（触发类型、时间、数字），**绝不**包含对话本身。
 3. **所有状态本地**。`~/.nom/state.json` 是人可读 JSON，删掉就完全重置。
 
 ## 许可证

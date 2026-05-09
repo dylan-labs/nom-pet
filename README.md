@@ -9,12 +9,11 @@ A desktop pet that lives on your screen and **eats the AI tokens you burn** — 
 ## Features
 
 - **Eats tokens in real time** — tails `~/.claude/projects/*.jsonl`, animates whenever Claude generates output.
-- **Knows when Claude is thinking** — shows a `Claude · 思考中…` card above its head from the moment you press enter to the moment a reply lands.
 - **Greets new sessions** — wakes up and bubbles a hello when you open a new Claude Code session.
 - **Wanders on its own** — strolls around the screen between activity, like a real desktop companion (toggle off via right-click).
 - **Skin support** — install any [petdex](https://github.com/crafter-station/petdex) pack with `npx petdex install <slug>`, then right-click → **选择宠物** to switch on the fly. No restart.
 - **Sleeps when idle, wakes when you're back** — 30 min of silence and it dozes off.
-- **Talks** — milestones, time-of-day greetings, eating remarks, all from local dialogue files. **No LLM calls, ever.**
+- **Chat-card bubbles** — contextual lines on session start, milestones, click-to-talk, eating bursts. Local templates by default; **optional** LLM upgrade for dynamic, situation-aware lines (see below).
 - **Drag anywhere** on the pet to move it; window position remembers across restarts.
 - **Multi-display friendly** — `⌘⌥N` summons it back to whichever screen your cursor is on.
 
@@ -50,10 +49,31 @@ Right-click the pet → **选择宠物** → pick your new skin. Pets live in `~
 | Item | What it does |
 |---|---|
 | ☑ 允许游走 | Toggle auto-wander on/off |
+| ☐ AI 台词 | Toggle LLM-powered dialogue (see below) |
 | 选择宠物 → | Switch among installed petdex skins |
+| 打开配置文件 | Open `~/.nom/state.json` for manual edits |
 | 关闭宠物 | Quit |
 
 Plus a global shortcut: `⌘⌥N` (Mac) / `Ctrl+Alt+N` (Win) to summon the pet to the current screen.
+
+## Optional: AI-powered dialogue
+
+By default nom speaks from a local template file — fully offline, deterministic, no network. If you want context-aware lines (e.g. *"凌晨两点了还在用 Claude，你这个 prompt 写得有点暴躁啊"*), wire it to any **OpenAI-compatible chat-completions endpoint** — your own Anthropic key, an Ollama instance, a self-hosted model, anything that speaks the OpenAI API.
+
+1. Right-click the pet → enable **AI 台词**
+2. Right-click → **打开配置文件** (opens `~/.nom/state.json`)
+3. Edit the `llm` block:
+   ```json
+   "llm": {
+     "enabled": true,
+     "endpoint": "https://api.anthropic.com/v1/...",
+     "model": "claude-haiku-4-5-20251001",
+     "apiKey": "sk-..."
+   }
+   ```
+4. Quit and relaunch nom.
+
+**Privacy contract**: only metadata (trigger type, time of day, token counts) ever leaves your machine. Your prompts and Claude's responses are **never** sent to the LLM endpoint. Failed / timed-out LLM calls silently fall back to the local templates — the pet keeps working even if your endpoint goes down.
 
 ## Develop
 
@@ -73,8 +93,8 @@ Architecture, technical decisions, and reasoning are in [`CLAUDE.md`](./CLAUDE.m
 
 nom is paranoid by design:
 
-1. **No network calls.** Verify in `package.json` — there's no HTTP client dependency.
-2. **No prompt/response content read.** It only parses `usage.{input,output,cache_*}_tokens` numbers from JSONL.
+1. **No network calls by default.** The base experience is fully offline — everything ships from your local Claude Code transcripts. The optional AI dialogue feature is the only thing that can hit the network, and only when you explicitly enable it and configure an endpoint.
+2. **No prompt/response content ever read or sent.** nom only parses `usage.{input,output,cache_*}_tokens` numbers from JSONL. When AI dialogue is on, only metadata (trigger, time, counts) goes to your LLM endpoint — never the actual conversation.
 3. **All state local.** `~/.nom/state.json` is human-readable JSON. Nuke the dir to fully reset.
 
 ## License
