@@ -6,6 +6,8 @@
 
 > **隐私优先**：nom 不向任何地方上传你的数据。它只读用量数字（不读 prompt/response），所有状态存在你机器上的 `~/.nom/`，随时可以 `rm -rf ~/.nom` 清空。
 
+![nom — 桌面上的宠物以及设置面板](./assets/screenshots/settings.png)
+
 ## 功能
 
 - **实时吃多源 token** —— 同时监听 `~/.claude/projects/*.jsonl`（Claude Code）和 `~/.codex/sessions/**/*.jsonl`（Codex CLI），每个源右键菜单可独立开关。
