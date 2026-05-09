@@ -27,6 +27,10 @@ const DEFAULT_SETTINGS: NomSettings = {
   wanderEnabled: true,
   activePetSlug: null,
   llm: null,
+  sources: {
+    claudeCode: true,
+    codex: true,
+  },
 };
 
 const DEFAULT_STATE: NomState = {
@@ -101,6 +105,14 @@ export class Store {
                     : null,
                 }
               : DEFAULT_SETTINGS.llm,
+            sources: {
+              claudeCode: typeof parsed.settings?.sources?.claudeCode === 'boolean'
+                ? parsed.settings.sources.claudeCode
+                : DEFAULT_SETTINGS.sources.claudeCode,
+              codex: typeof parsed.settings?.sources?.codex === 'boolean'
+                ? parsed.settings.sources.codex
+                : DEFAULT_SETTINGS.sources.codex,
+            },
           },
         };
       }
@@ -150,6 +162,12 @@ export class Store {
 
   setActivePetSlug(slug: string | null): NomSettings {
     this.state.settings.activePetSlug = slug;
+    this.scheduleWrite();
+    return this.getSettings();
+  }
+
+  setSourceEnabled(source: 'claudeCode' | 'codex', enabled: boolean): NomSettings {
+    this.state.settings.sources[source] = enabled;
     this.scheduleWrite();
     return this.getSettings();
   }

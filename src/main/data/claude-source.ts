@@ -4,22 +4,23 @@ import path from 'node:path';
 import os from 'node:os';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { computeWeightedTokens, type AnthropicUsage } from './usage';
+import type { SourceId } from '../../shared/types';
 
 export interface RawTokensEvent {
   delta: number;
-  source: 'claude-code';
+  source: SourceId;
   timestamp: number;
 }
 
 export interface RawSessionEvent {
-  source: 'claude-code';
+  source: SourceId;
   sessionId: string;
   kind: 'start';
   timestamp: number;
 }
 
 export interface RawThinkingEvent {
-  source: 'claude-code';
+  source: SourceId;
   sessionId: string;
   kind: 'start' | 'end';
   timestamp: number;
@@ -39,6 +40,7 @@ export declare interface ClaudeSource {
 const THINKING_TIMEOUT_MS = 3 * 60 * 1000;
 
 export class ClaudeSource extends EventEmitter {
+  readonly id: SourceId = 'claude-code';
   private watcher: FSWatcher | null = null;
   private offsets = new Map<string, number>();
   private rootDir: string;
@@ -52,6 +54,7 @@ export class ClaudeSource extends EventEmitter {
   }
 
   start(): void {
+    if (this.watcher) return; // idempotent: settings toggles re-call this
     if (!fs.existsSync(this.rootDir)) {
       // No Claude Code transcripts on this machine — silently no-op.
       return;

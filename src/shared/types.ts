@@ -26,25 +26,32 @@ export interface LoadedPet {
   spritesheetDataUrl: string;
 }
 
+export type SourceId = 'claude-code' | 'codex';
+
 export interface TokensEvent {
   delta: number;
-  source: 'claude-code';
+  source: SourceId;
   timestamp: number;
   snapshot: StateSnapshot;
 }
 
 export interface SessionEvent {
-  source: 'claude-code';
+  source: SourceId;
   sessionId: string;
   kind: 'start';
   timestamp: number;
 }
 
 export interface ThinkingEvent {
-  source: 'claude-code';
+  source: SourceId;
   sessionId: string;
   kind: 'start' | 'end';
   timestamp: number;
+}
+
+export interface SourceSettings {
+  claudeCode: boolean;
+  codex: boolean;
 }
 
 export interface LlmSettings {
@@ -58,6 +65,7 @@ export interface NomSettings {
   wanderEnabled: boolean;
   activePetSlug: string | null;
   llm: LlmSettings | null;
+  sources: SourceSettings;
 }
 
 export type DialogueTrigger =

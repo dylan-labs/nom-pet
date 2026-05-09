@@ -3,11 +3,13 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
 import { ClaudeSource } from './data/claude-source';
+import { CodexSource } from './data/codex-source';
 import { Store, type WindowPosition } from './data/store';
 import { scanTodayHistory } from './data/today-scan';
+import { scanCodexTodayHistory } from './data/codex-today-scan';
 import { loadUserPet, listInstalledPets } from './data/pet-loader';
 import { generateLine } from './data/llm';
-import type { DialogueContext, NomSettings, SessionEvent, StateSnapshot, ThinkingEvent, TokensEvent } from '../shared/types';
+import type { DialogueContext, NomSettings, SessionEvent, SourceId, StateSnapshot, ThinkingEvent, TokensEvent } from '../shared/types';
 
 const WIN_SIZE = 200;
 const MOVE_DEBOUNCE_MS = 400;
@@ -15,7 +17,19 @@ const SUMMON_SHORTCUT = 'CommandOrControl+Alt+N';
 
 let petWindow: BrowserWindow | null = null;
 const claudeSource = new ClaudeSource();
+const codexSource = new CodexSource();
 const store = new Store();
+
+/**
+ * Reconcile source watchers with the current settings — start the ones that
+ * are enabled and not running, stop the ones that are running but disabled.
+ * Called on boot and after every settings change.
+ */
+function reconcileSources(): void {
+  const s = store.getSettings().sources;
+  if (s.claudeCode) claudeSource.start(); else claudeSource.stop();
+  if (s.codex)      codexSource.start();  else codexSource.stop();
+}
 
 // --- Single-instance lock --------------------------------------------------
 // If another nom is already running, exit immediately and tell the existing
@@ -156,6 +170,31 @@ function createPetWindow() {
           petWindow?.webContents.send('nom:settings:changed', next);
         },
       },
+      {
+        label: '数据源',
+        submenu: [
+          {
+            label: 'Claude Code',
+            type: 'checkbox',
+            checked: settings.sources.claudeCode,
+            click: (item) => {
+              const next = store.setSourceEnabled('claudeCode', item.checked);
+              reconcileSources();
+              petWindow?.webContents.send('nom:settings:changed', next);
+            },
+          },
+          {
+            label: 'Codex',
+            type: 'checkbox',
+            checked: settings.sources.codex,
+            click: (item) => {
+              const next = store.setSourceEnabled('codex', item.checked);
+              reconcileSources();
+              petWindow?.webContents.send('nom:settings:changed', next);
+            },
+          },
+        ],
+      },
       { label: '选择宠物', submenu: petSubmenu },
       {
         label: '打开配置文件',
@@ -196,9 +235,16 @@ async function main() {
   await store.load();
 
   try {
-    const scan = await scanTodayHistory();
-    store.setTodayBaseline(scan.tokens);
-    console.log(`[nom] today baseline: ${scan.tokens} tokens from ${scan.filesScanned} files`);
+    const [claude, codex] = await Promise.all([
+      scanTodayHistory(),
+      scanCodexTodayHistory(),
+    ]);
+    const total = claude.tokens + codex.tokens;
+    store.setTodayBaseline(total);
+    console.log(
+      `[nom] today baseline: ${total} tokens ` +
+      `(claude=${claude.tokens}/${claude.filesScanned}f, codex=${codex.tokens}/${codex.filesScanned}f)`
+    );
   } catch (err) {
     console.error('[nom] today scan failed:', err);
   }
@@ -260,20 +306,27 @@ async function main() {
     console.log(`[nom] could not register global shortcut ${SUMMON_SHORTCUT} (already in use?)`);
   }
 
-  claudeSource.on('tokens', (event) => {
+  // Both sources fan in to the same renderer events. Renderer doesn't
+  // care which source it came from (dialogue stays unified per user
+  // request); only the running token counter and animation react.
+  function onTokens(event: { delta: number; source: SourceId; timestamp: number }) {
     const snapshot = store.addTokens(event.delta);
-    const payload: TokensEvent = { ...event, snapshot };
-    petWindow?.webContents.send('nom:tokens', payload);
-  });
-  claudeSource.on('session', (event) => {
-    const payload: SessionEvent = { ...event };
-    petWindow?.webContents.send('nom:session', payload);
-  });
+    petWindow?.webContents.send('nom:tokens', { ...event, snapshot } satisfies TokensEvent);
+  }
+  function onSession(event: SessionEvent) {
+    petWindow?.webContents.send('nom:session', event);
+  }
+  claudeSource.on('tokens', onTokens);
+  claudeSource.on('session', onSession);
   claudeSource.on('thinking', (event) => {
+    // Codex doesn't emit thinking events yet — only Claude has the
+    // user/assistant turn pattern that maps onto "agent is thinking now".
     const payload: ThinkingEvent = { ...event };
     petWindow?.webContents.send('nom:thinking', payload);
   });
-  claudeSource.start();
+  codexSource.on('tokens', onTokens);
+  codexSource.on('session', onSession);
+  reconcileSources();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createPetWindow();
@@ -288,6 +341,7 @@ app.on('before-quit', async (e) => {
   try {
     globalShortcut.unregisterAll();
     claudeSource.stop();
+    codexSource.stop();
     await store.flush();
   } finally {
     app.exit(0);
