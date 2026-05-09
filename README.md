@@ -19,20 +19,22 @@ A desktop pet that lives on your screen and **eats the AI tokens you burn** — 
 
 ## Install (end users)
 
-Grab the latest installer from [Releases](../../releases).
+Download links always point to the latest release — bookmark and forget.
 
 ### macOS
 
-- **Apple Silicon (M1/M2/M3/M4)**: `nom-x.y.z-arm64.dmg`
-- **Intel Mac**: `nom-x.y.z-x64.dmg`
+- **Apple Silicon (M1/M2/M3/M4)**: [`nom-arm64.dmg`](https://github.com/dylan-labs/nom-pet/releases/latest/download/nom-arm64.dmg)
+- **Intel Mac**: [`nom-x64.dmg`](https://github.com/dylan-labs/nom-pet/releases/latest/download/nom-x64.dmg)
 
 Drag `nom.app` into `/Applications`. First launch macOS will block it — go to **System Settings → Privacy & Security**, scroll to the bottom and click **Open Anyway** next to nom. Confirm in the dialog and it'll launch from then on.
 
 ### Windows
 
-- `nom-x.y.z-setup.exe` — NSIS installer wizard, x64
+- [`nom-setup.exe`](https://github.com/dylan-labs/nom-pet/releases/latest/download/nom-setup.exe) — NSIS installer wizard, x64
 
 Double-click the setup, walk through the wizard. You'll get a desktop shortcut and a Start Menu entry.
+
+> Browsing all versions: [Releases page](../../releases).
 
 ## Use a custom pet skin
 

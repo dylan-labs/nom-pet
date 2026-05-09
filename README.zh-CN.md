@@ -19,20 +19,22 @@
 
 ## 安装（最终用户）
 
-到 [Releases](../../releases) 下载对应平台的安装包。
+下面这些链接**永远指向最新版**，存一次就行，不用每次发版都换：
 
 ### macOS
 
-- **Apple Silicon（M1/M2/M3/M4）**：`nom-x.y.z-arm64.dmg`
-- **Intel Mac**：`nom-x.y.z-x64.dmg`
+- **Apple Silicon（M1/M2/M3/M4）**：[`nom-arm64.dmg`](https://github.com/dylan-labs/nom-pet/releases/latest/download/nom-arm64.dmg)
+- **Intel Mac**：[`nom-x64.dmg`](https://github.com/dylan-labs/nom-pet/releases/latest/download/nom-x64.dmg)
 
 把 `nom.app` 拖进 `/Applications`。首次打开 macOS 会拦截 —— 打开 **系统设置 → 隐私与安全性**，拉到底，点 nom 旁边的 **仍然打开**，弹窗里再确认一次就行，以后双击直接启动。
 
 ### Windows
 
-- `nom-x.y.z-setup.exe` —— NSIS 安装向导，x64
+- [`nom-setup.exe`](https://github.com/dylan-labs/nom-pet/releases/latest/download/nom-setup.exe) —— NSIS 安装向导，x64
 
 双击 setup，走完向导。桌面会有快捷方式，开始菜单也能找到。
+
+> 想看历史版本：[Releases 页面](../../releases)
 
 ## 换宠物皮肤
 

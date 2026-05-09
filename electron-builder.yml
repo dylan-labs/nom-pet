@@ -22,14 +22,18 @@ mac:
   identity: "-"
 
 dmg:
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  # Stable filename (no version) so releases/latest/download/<file> URLs in
+  # the README keep working across version bumps. The actual version is
+  # still visible inside the dmg metadata + app About dialog + GitHub
+  # release page.
+  artifactName: ${productName}-${arch}.${ext}
 
 win:
   target:
     - target: nsis
       arch:
         - x64
-  artifactName: ${productName}-${version}-setup.${ext}
+  artifactName: ${productName}-setup.${ext}
 
 nsis:
   oneClick: false
