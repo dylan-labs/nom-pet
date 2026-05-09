@@ -1,3 +1,5 @@
+**English** | [简体中文](./README.zh-CN.md)
+
 # nom
 
 A desktop pet that lives on your screen and **eats the AI tokens you burn** — currently feeds on Claude Code (Codex / Cursor support coming).
