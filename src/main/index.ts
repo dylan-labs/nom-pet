@@ -7,8 +7,7 @@ import { scanTodayHistory } from './data/today-scan';
 import { scanCodexTodayHistory } from './data/codex-today-scan';
 import { loadUserPet, listInstalledPets } from './data/pet-loader';
 import { generateLine } from './data/llm';
-import { listVisibleWindows } from './data/window-detector';
-import type { DialogueContext, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SessionEvent, SourceId, StateSnapshot, ThinkingEvent, TokensEvent, VisibleWindowRect } from '../shared/types';
+import type { DialogueContext, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SessionEvent, SourceId, StateSnapshot, ThinkingEvent, TokensEvent } from '../shared/types';
 
 const WIN_SIZE = 200;
 const MOVE_DEBOUNCE_MS = 400;
@@ -30,6 +29,7 @@ function reconcileSources(): void {
   if (s.claudeCode) claudeSource.start(); else claudeSource.stop();
   if (s.codex)      codexSource.start();  else codexSource.stop();
 }
+
 
 // --- Single-instance lock --------------------------------------------------
 // If another nom is already running, exit immediately and tell the existing
@@ -307,7 +307,6 @@ async function main() {
     if (!llm) return null;
     return generateLine(llm, ctx);
   });
-  ipcMain.handle('nom:windows:list', (): Promise<VisibleWindowRect[]> => listVisibleWindows());
 
   let dragOrigin: { mouseX: number; mouseY: number; winX: number; winY: number } | null = null;
   ipcMain.on('nom:drag:begin', (_, { x, y }: { x: number; y: number }) => {

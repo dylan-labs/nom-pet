@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { DialogueContext, InstalledPetInfo, LevelInfo, LevelUpEvent, LlmSettings, LoadedPet, NomSettings, SessionEvent, StateSnapshot, ThinkingEvent, TokensEvent, VisibleWindowRect } from '../shared/types';
+import type { DialogueContext, InstalledPetInfo, LevelInfo, LevelUpEvent, LlmSettings, LoadedPet, NomSettings, SessionEvent, StateSnapshot, ThinkingEvent, TokensEvent } from '../shared/types';
 
 const api = {
   version: '0.0.11',
@@ -92,9 +92,6 @@ const api = {
   },
   testLlm(llm: LlmSettings): Promise<{ ok: boolean; ms: number; error?: string; sample?: string }> {
     return ipcRenderer.invoke('nom:llm:test', llm);
-  },
-  listVisibleWindows(): Promise<VisibleWindowRect[]> {
-    return ipcRenderer.invoke('nom:windows:list') as Promise<VisibleWindowRect[]>;
   },
 };
 
