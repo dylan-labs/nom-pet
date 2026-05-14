@@ -10,7 +10,8 @@ import { scanCodexRecentHistory, scanCodexLifetimeHistory } from './data/codex-t
 import { loadUserPet, listInstalledPets } from './data/pet-loader';
 import { generateLine, testLlm } from './data/llm';
 import { generateJournalForYesterday, listJournalDates, readJournal, regenerateJournal } from './data/journal';
-import type { DailyReport, DialogueContext, JournalCreatedEvent, JournalEntry, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SessionEvent, SoulKernel, SoulPreset, SourceId, StateReconciledEvent, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
+import { TickEngine } from './data/tick';
+import type { AutonomySettings, DailyReport, DialogueContext, JournalCreatedEvent, JournalEntry, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SessionEvent, SoulKernel, SoulPreset, SourceId, StateReconciledEvent, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
 import { presetText } from './data/soul';
 
 const WIN_SIZE = 200;
@@ -28,6 +29,7 @@ let pendingCardPayload: WeeklyCardPayload | null = null;
 const claudeSource = new ClaudeSource();
 const codexSource = new CodexSource();
 const store = new Store();
+const tickEngine = new TickEngine(store);
 // In-memory only — used to flavour LLM dialogue ("you haven't fed me in 20
 // minutes"). Reset on launch by design: persisting would let cross-session
 // gaps leak in, which makes no sense ("you haven't fed me in 3 days").
@@ -632,6 +634,15 @@ async function main() {
     petWindow?.webContents.send('nom:settings:changed', next);
     return next;
   });
+  ipcMain.handle('nom:settings:setAutonomy', (_, patch: Partial<AutonomySettings>): NomSettings => {
+    const next = store.setAutonomy(patch);
+    // The tick engine listens to settings via store.getSettings() inside
+    // each tick, but interval cadence and enabled-state are read at
+    // start() time — so a restart picks up the new values cleanly.
+    tickEngine.restart();
+    petWindow?.webContents.send('nom:settings:changed', next);
+    return next;
+  });
   // ── Onboarding ───────────────────────────────────────────────────────
   ipcMain.handle('nom:onboarding:isPending', (): boolean => !store.isOnboarded());
   ipcMain.handle('nom:onboarding:complete', (_, args: { petName: string; preset: SoulPreset; customText?: string }): NomSettings => {
@@ -773,6 +784,10 @@ async function main() {
     if (levelUp) {
       petWindow?.webContents.send('nom:level:up', levelUp);
     }
+    // Let the autonomy engine update its absence record. Fire-and-forget
+    // — a slow disk write shouldn't slow down token processing, and
+    // failures are logged inside touchAbsence.
+    void tickEngine.onActivity(event.timestamp);
   }
   function onSession(event: SessionEvent) {
     petWindow?.webContents.send('nom:session', event);
@@ -789,6 +804,11 @@ async function main() {
   codexSource.on('session', onSession);
   reconcileSources();
 
+  // Boot the autonomy heartbeat after sources are live. Internally
+  // no-ops when settings.autonomy.enabled is false, so this is safe to
+  // unconditionally call.
+  tickEngine.start();
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createPetWindow();
   });
@@ -803,6 +823,7 @@ app.on('before-quit', async (e) => {
     globalShortcut.unregisterAll();
     claudeSource.stop();
     codexSource.stop();
+    tickEngine.stop();
     await store.flush();
   } finally {
     app.exit(0);

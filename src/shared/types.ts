@@ -121,6 +121,78 @@ export interface SoulKernel {
   text: string;
 }
 
+/**
+ * Toggles that control the autonomous-pet feature (The Tick + Pet Mind).
+ * Master switch is OFF by default — the user has to opt in after reading
+ * the privacy disclosure, because turning this on sends additional
+ * context (mood + recent pet-mind notes) to the configured LLM.
+ */
+export interface AutonomySettings {
+  enabled: boolean;
+  /** Minutes between tick decisions. Spec default 30, allowed range 15–90. */
+  tickIntervalMin: number;
+  /** Hard daily cap on unprompted speak bubbles, to prevent the chatty-pet uninstall pattern. */
+  maxBubblesPerDay: number;
+  /** Whether the pet is allowed to occasionally ask the user a question (Phase 3). */
+  allowAskMode: boolean;
+}
+
+/**
+ * Five-state mood drift. Stays mostly sticky (≥60% chance unchanged per
+ * tick) but slowly shifts in response to time-of-day, idle duration, and
+ * the user's intake rhythm. Tints every LLM call via composeSystemPrompt
+ * — it's potential-text, not a UI indicator, so the change reads as
+ * "today my pet feels off" rather than an explicit RPG mood meter.
+ */
+export type Mood = 'vivacious' | 'normal' | 'pensive' | 'cranky' | 'withdrawn';
+
+/**
+ * Persisted mood state — current value + when it last moved + a short
+ * audit trail. The reason field flows into the Settings "透明度" widget
+ * (Phase 3) so users can see WHY their pet went moody.
+ */
+export interface MoodState {
+  current: Mood;
+  shiftedAt: string;          // ISO timestamp of last drift
+  reason: string;             // short human-readable cause
+  recent: Array<{
+    from: Mood;
+    to: Mood;
+    at: string;
+    reason: string;
+  }>;
+}
+
+/**
+ * One entry in the pet's private notebook (`~/.nom/pet-mind/notes.jsonl`).
+ * The LLM appends these on each tick; on subsequent ticks they form
+ * context, giving the pet apparent continuity across sessions.
+ * Users CAN read this file — privacy by transparency, not by hiding.
+ */
+export interface PetMindNote {
+  ts: string;                                    // ISO
+  mood: Mood;
+  kind: 'observation' | 'opinion' | 'self' | 'dream';
+  text: string;                                  // ≤ 200 chars typically
+}
+
+/**
+ * Tracks how long the user has been away (no token events). Read when
+ * a token finally lands to decide whether to fire a "you were gone for
+ * X hours" reaction. `longestGap` is for flavour — pet might reference
+ * its personal "longest separation" in a future bubble.
+ */
+export interface AbsenceRecord {
+  lastActiveAt: string | null;
+  longestGap: { hours: number; endedAt: string } | null;
+}
+
+/** What happened on the most recent tick — surfaced by the transparency widget. */
+export interface LastTickRecord {
+  at: string;
+  decision: 'silent' | 'observation' | 'speak' | 'mood_shift' | 'ask' | 'note' | 'dream';
+}
+
 export interface NomSettings {
   wanderEnabled: boolean;
   activePetSlug: string | null;
@@ -131,6 +203,8 @@ export interface NomSettings {
   onboarded: boolean;
   /** Pet personality. null until onboarding is done. */
   soulKernel: SoulKernel | null;
+  /** Autonomous-pet feature toggles (v0.0.25+). */
+  autonomy: AutonomySettings;
 }
 
 export type DialogueTrigger =

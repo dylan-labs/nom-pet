@@ -91,6 +91,11 @@ export function SettingsApp() {
     setSettings(next);
   }
 
+  async function toggleAutonomy(enabled: boolean) {
+    const next = await window.nom.setAutonomy({ enabled });
+    setSettings(next);
+  }
+
   function flashSaved() {
     setSavedFlash(true);
     setTimeout(() => setSavedFlash(false), 1800);
@@ -200,6 +205,16 @@ export function SettingsApp() {
           <Row label="自动游走" sub="闲置时宠物会自己在桌面溜达">
             <Toggle checked={settings.wanderEnabled} onChange={toggleWander} />
           </Row>
+          <Row label="自主性（实验）" sub="开启后宠物每 30 分钟自己'想一下'，偶尔自发说话">
+            <Toggle checked={settings.autonomy.enabled} onChange={toggleAutonomy} />
+          </Row>
+          {settings.autonomy.enabled && (
+            <div className="card-note">
+              <strong>宠物开始有自己的心情和小笔记了</strong>：记在 <code>~/.nom/pet-mind/</code>，你随时可以打开看。
+              开启 AI 台词时，这些笔记（关于你近期行为的描述）会发到你配置的 LLM 端点 ——
+              不开 AI 台词的话，宠物只默默记笔记，不说话。
+            </div>
+          )}
         </section>
 
         {/* Soul kernel — sit above AI 台词 because the soul precedes the mouth */}

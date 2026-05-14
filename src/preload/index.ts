@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { DailyReport, DialogueContext, InstalledPetInfo, JournalCreatedEvent, JournalEntry, LevelInfo, LevelUpEvent, LlmSettings, LoadedPet, NomSettings, SessionEvent, SoulKernel, SoulPreset, StateReconciledEvent, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
+import type { AutonomySettings, DailyReport, DialogueContext, InstalledPetInfo, JournalCreatedEvent, JournalEntry, LevelInfo, LevelUpEvent, LlmSettings, LoadedPet, NomSettings, SessionEvent, SoulKernel, SoulPreset, StateReconciledEvent, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
 
 const api = {
   version: '0.0.24',
@@ -133,6 +133,9 @@ const api = {
   },
   setPetName(name: string): Promise<NomSettings> {
     return ipcRenderer.invoke('nom:settings:setName', name) as Promise<NomSettings>;
+  },
+  setAutonomy(patch: Partial<AutonomySettings>): Promise<NomSettings> {
+    return ipcRenderer.invoke('nom:settings:setAutonomy', patch) as Promise<NomSettings>;
   },
   // ── Pet Journal ──────────────────────────────────────────────────────
   journal: {

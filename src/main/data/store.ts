@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import type { DailyReport, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SoulKernel, SoulPreset, SourceId, StateSnapshot, Weekday, WeeklyDayBucket, WeeklyReport } from '../../shared/types';
+import type { AutonomySettings, DailyReport, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SoulKernel, SoulPreset, SourceId, StateSnapshot, Weekday, WeeklyDayBucket, WeeklyReport } from '../../shared/types';
 import { computeLevel, levelBadgeAt } from './levels';
 import { computeSeal, verifySeal } from './seal';
 
@@ -12,7 +12,7 @@ export interface WindowPosition {
   displayId?: number;
 }
 
-const SCHEMA_VERSION = 5; // v5 (0.0.24): per-source today bucket so the "today" counter filters when a source is toggled off.
+const SCHEMA_VERSION = 6; // v6 (0.0.25): settings.autonomy for the autonomous-pet feature (Tick + Pet Mind).
 
 export interface NomState {
   schemaVersion: number;
@@ -48,6 +48,16 @@ export interface NomState {
   settings: NomSettings;
 }
 
+const DEFAULT_AUTONOMY: AutonomySettings = {
+  // OFF by default — users opt in after reading the privacy disclosure.
+  // Turning autonomy on lets the pet send mood + recent self-notes to
+  // the configured LLM, which is materially more info than v0.0.24.
+  enabled: false,
+  tickIntervalMin: 30,
+  maxBubblesPerDay: 2,
+  allowAskMode: true,
+};
+
 const DEFAULT_SETTINGS: NomSettings = {
   wanderEnabled: true,
   activePetSlug: null,
@@ -59,7 +69,23 @@ const DEFAULT_SETTINGS: NomSettings = {
   petName: 'Mochi',
   onboarded: false,
   soulKernel: null,
+  autonomy: { ...DEFAULT_AUTONOMY },
 };
+
+function parseAutonomy(raw: unknown): AutonomySettings {
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_AUTONOMY };
+  const o = raw as Partial<AutonomySettings>;
+  return {
+    enabled: typeof o.enabled === 'boolean' ? o.enabled : DEFAULT_AUTONOMY.enabled,
+    tickIntervalMin: typeof o.tickIntervalMin === 'number' && Number.isFinite(o.tickIntervalMin)
+      ? Math.max(15, Math.min(90, Math.round(o.tickIntervalMin)))
+      : DEFAULT_AUTONOMY.tickIntervalMin,
+    maxBubblesPerDay: typeof o.maxBubblesPerDay === 'number' && Number.isFinite(o.maxBubblesPerDay)
+      ? Math.max(0, Math.min(10, Math.round(o.maxBubblesPerDay)))
+      : DEFAULT_AUTONOMY.maxBubblesPerDay,
+    allowAskMode: typeof o.allowAskMode === 'boolean' ? o.allowAskMode : DEFAULT_AUTONOMY.allowAskMode,
+  };
+}
 
 const VALID_SOUL_PRESETS: SoulPreset[] = [
   'tsundere-architect', 'old-tcm-doctor', 'tang-concubine',
@@ -177,13 +203,22 @@ export class Store {
         };
         this.scheduleWrite();
         console.log(`[nom] state migrated from schema ${parsed.schemaVersion} → ${SCHEMA_VERSION} (token counts reset)`);
-      } else if (parsed.schemaVersion === 2 || parsed.schemaVersion === SCHEMA_VERSION) {
+      } else if (parsed.schemaVersion >= 2 && parsed.schemaVersion <= SCHEMA_VERSION) {
+        // Any version from 2 up to the current schema migrates forward
+        // by preserving all the fields we still understand and filling
+        // newly-added ones with defaults. Critically: BEFORE this fix
+        // the branch only fired on v===2 || v===SCHEMA_VERSION, so a
+        // user on v3/v4/v5 would silently fall through, this.state would
+        // stay at the constructor's DEFAULT_STATE, and the next write
+        // would clobber petName / soulKernel / llm with defaults.
         const claimed = {
           cumulative: Math.max(0, Number(parsed.tokens?.cumulative ?? 0)),
           lastLevelIndex: typeof parsed.lastLevelIndex === 'number' ? parsed.lastLevelIndex : -1,
         };
         if (parsed.schemaVersion === SCHEMA_VERSION) {
-          // Authentic v3 — verify the seal. Mismatch = tampered → reset.
+          // Authentic current-version state — verify the seal. Mismatch
+          // = tampered (or a really old pre-seal file slipped through
+          // somehow) → reset cumulative + level only, keep the rest.
           const sealOk = verifySeal(claimed, parsed.seal);
           if (!sealOk && (claimed.cumulative > 0 || claimed.lastLevelIndex > 0)) {
             console.warn('[nom] state seal mismatch — possible tamper. Resetting cumulative + level.');
@@ -191,9 +226,12 @@ export class Store {
             claimed.lastLevelIndex = -1;
           }
         } else {
-          // v2 → v3 amnesty: pre-seal era, accept current value as legit.
-          // Will be sealed on next write (scheduleWrite below).
-          console.log('[nom] migrating state v2 → v3 (cumulative preserved, future writes sealed)');
+          // Older schema → migrate up. cumulative/lastLevelIndex were
+          // either already sealed (v3+) or never sealed (v2); either way
+          // we accept the current value and reseal on the very next
+          // write. lifetime-reconcile (in main) will also kick in and
+          // catch up if anything got under-counted live.
+          console.log(`[nom] migrating state v${parsed.schemaVersion} → v${SCHEMA_VERSION}`);
           this.scheduleWrite();
         }
         // Per-source today bucket — only valid for the date in
@@ -255,6 +293,7 @@ export class Store {
               ? parsed.settings.onboarded
               : DEFAULT_SETTINGS.onboarded,
             soulKernel: parseSoulKernel(parsed.settings?.soulKernel),
+            autonomy: parseAutonomy(parsed.settings?.autonomy),
           },
         };
       }
@@ -599,6 +638,12 @@ export class Store {
 
   setLlmSettings(llm: LlmSettings | null): NomSettings {
     this.state.settings.llm = llm;
+    this.scheduleWrite();
+    return this.getSettings();
+  }
+
+  setAutonomy(patch: Partial<AutonomySettings>): NomSettings {
+    this.state.settings.autonomy = parseAutonomy({ ...this.state.settings.autonomy, ...patch });
     this.scheduleWrite();
     return this.getSettings();
   }

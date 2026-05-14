@@ -11,7 +11,8 @@
     "pack": "electron-vite build && electron-builder",
     "pack:mac": "electron-vite build && electron-builder --mac",
     "pack:win": "electron-vite build && electron-builder --win",
-    "journal:test": "esbuild scripts/test-journal.mts --bundle --platform=node --format=esm --target=node20 --outfile=scripts/test-journal.bundle.mjs --packages=external && node scripts/test-journal.bundle.mjs --force"
+    "journal:test": "esbuild scripts/test-journal.mts --bundle --platform=node --format=esm --target=node20 --outfile=scripts/test-journal.bundle.mjs --packages=external && node scripts/test-journal.bundle.mjs --force",
+    "tick:test": "esbuild scripts/test-tick.mts --bundle --platform=node --format=esm --target=node20 --outfile=scripts/test-tick.bundle.mjs --packages=external && node scripts/test-tick.bundle.mjs"
   },
   "engines": {
     "node": ">=18"
