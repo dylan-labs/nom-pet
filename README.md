@@ -6,7 +6,7 @@ A desktop pet that lives on your screen and **eats the AI tokens you burn** — 
 
 > **Privacy first**: nom never sends your token data anywhere. It only reads usage numbers (not prompts/responses) from local transcripts, stores everything in `~/.nom/` on your machine, and you can `rm -rf ~/.nom` at any time.
 
-![nom — pet on the desktop with the settings panel open](./assets/screenshots/settings.png)
+![nom — weekly token card, Game Boy style](./assets/screenshots/weekly-card.png)
 
 ## Features
 
