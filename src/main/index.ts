@@ -11,6 +11,7 @@ import { loadUserPet, listInstalledPets } from './data/pet-loader';
 import { generateLine, testLlm } from './data/llm';
 import { generateJournalForYesterday, listJournalDates, readJournal, regenerateJournal } from './data/journal';
 import { TickEngine } from './data/tick';
+import { readMood } from './data/pet-mind';
 import type { AutonomySettings, DailyReport, DialogueContext, JournalCreatedEvent, JournalEntry, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SessionEvent, SoulKernel, SoulPreset, SourceId, StateReconciledEvent, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
 import { presetText } from './data/soul';
 
@@ -685,7 +686,10 @@ async function main() {
       petName: settings.petName,
       minutesSinceLastFed: lastFedAt == null ? null : Math.floor((Date.now() - lastFedAt) / 60000),
     };
-    return generateLine(settings.llm, enriched, settings.soulKernel);
+    // Pull the pet's current mood (when autonomy is on) so every
+    // user-triggered line is also tinted by how the pet feels today.
+    const moodState = settings.autonomy.enabled ? await readMood() : null;
+    return generateLine(settings.llm, enriched, settings.soulKernel, moodState?.current);
   });
   ipcMain.handle('nom:report:get', (): { pending: boolean; report: DailyReport | null } => ({
     pending: store.isDailyReportPending(),
@@ -807,6 +811,12 @@ async function main() {
   // Boot the autonomy heartbeat after sources are live. Internally
   // no-ops when settings.autonomy.enabled is false, so this is safe to
   // unconditionally call.
+  tickEngine.on('bubble', (e) => {
+    petWindow?.webContents.send('nom:autonomy:bubble', e);
+  });
+  tickEngine.on('decision', () => {
+    // No-op for now; the Phase 3 transparency widget will subscribe.
+  });
   tickEngine.start();
 
   app.on('activate', () => {

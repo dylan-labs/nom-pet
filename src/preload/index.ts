@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AutonomySettings, DailyReport, DialogueContext, InstalledPetInfo, JournalCreatedEvent, JournalEntry, LevelInfo, LevelUpEvent, LlmSettings, LoadedPet, NomSettings, SessionEvent, SoulKernel, SoulPreset, StateReconciledEvent, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
+import type { AutonomyBubbleEvent, AutonomySettings, DailyReport, DialogueContext, InstalledPetInfo, JournalCreatedEvent, JournalEntry, LevelInfo, LevelUpEvent, LlmSettings, LoadedPet, NomSettings, SessionEvent, SoulKernel, SoulPreset, StateReconciledEvent, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
 
 const api = {
   version: '0.0.24',
@@ -136,6 +136,13 @@ const api = {
   },
   setAutonomy(patch: Partial<AutonomySettings>): Promise<NomSettings> {
     return ipcRenderer.invoke('nom:settings:setAutonomy', patch) as Promise<NomSettings>;
+  },
+  /** Pet decided to speak unprompted. Renderer should show it via the
+   * standard bubble surface — same UI as user-triggered dialogue. */
+  onAutonomyBubble(callback: (event: AutonomyBubbleEvent) => void): () => void {
+    const listener = (_: Electron.IpcRendererEvent, event: AutonomyBubbleEvent) => callback(event);
+    ipcRenderer.on('nom:autonomy:bubble', listener);
+    return () => ipcRenderer.removeListener('nom:autonomy:bubble', listener);
   },
   // ── Pet Journal ──────────────────────────────────────────────────────
   journal: {

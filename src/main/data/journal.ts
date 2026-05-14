@@ -5,6 +5,7 @@ import os from 'node:os';
 import type { JournalDailyMetadata, JournalEntry, NomSettings, SoulPreset, Weekday } from '../../shared/types';
 import { generateJournalEntry } from './llm';
 import { renderTemplateJournal } from './journal-template';
+import { readMood } from './pet-mind';
 import { Store } from './store';
 
 const DIR = path.join(os.homedir(), '.nom', 'journal');
@@ -213,12 +214,18 @@ async function composeEntry(
   let generatedBy: 'llm' | 'template' = 'template';
 
   if (settings.llm?.enabled) {
+    // Thread the pet's current mood through so journal voice picks up
+    // today's emotional tint. Mood-aware journals are the same prose
+    // as before but coloured by whatever the pet's been feeling — a
+    // cranky day reads grumpier, a withdrawn day shorter and quieter.
+    const moodState = settings.autonomy.enabled ? await readMood() : null;
     const result = await generateJournalEntry(
       settings.llm,
       settings.petName,
       settings.soulKernel,
       meta,
       label,
+      moodState?.current,
     );
     if (result) {
       body = result.body;

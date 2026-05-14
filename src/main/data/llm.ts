@@ -1,5 +1,6 @@
-import type { DialogueContext, JournalDailyMetadata, LlmSettings, SoulKernel } from '../../shared/types';
+import type { DialogueContext, JournalDailyMetadata, LlmSettings, Mood, SoulKernel } from '../../shared/types';
 import { composeSystemPrompt } from './soul';
+import { buildDecisionMessages, parseDecision, type Decision, type DecisionContext } from './autonomy-prompt';
 
 const REQUEST_TIMEOUT_MS = 20000;
 // Journals are longer (80-200 char prose) and thinking models may need
@@ -193,6 +194,7 @@ export async function generateLine(
   settings: LlmSettings,
   ctx: DialogueContext,
   kernel: SoulKernel | null = null,
+  mood?: Mood,
 ): Promise<string | null> {
   if (!settings.enabled || !settings.endpoint || !settings.model) return null;
 
@@ -209,7 +211,7 @@ export async function generateLine(
       body: JSON.stringify({
         model: settings.model,
         messages: [
-          { role: 'system', content: composeSystemPrompt(ctx.petName ?? 'nom', kernel) },
+          { role: 'system', content: composeSystemPrompt(ctx.petName ?? 'nom', kernel, 'line', mood) },
           { role: 'user', content: userPromptFor(ctx) + '\n/no_think' },
         ],
         max_tokens: MAX_TOKENS,
@@ -376,6 +378,7 @@ export async function generateJournalEntry(
   kernel: SoulKernel | null,
   meta: JournalDailyMetadata,
   dateLabel: string,
+  mood?: Mood,
 ): Promise<{ body: string; weather: string | null } | null> {
   if (!settings.enabled || !settings.endpoint || !settings.model) return null;
 
@@ -405,7 +408,7 @@ export async function generateJournalEntry(
       body: JSON.stringify({
         model: settings.model,
         messages: [
-          { role: 'system', content: composeSystemPrompt(petName, kernel, 'journal') },
+          { role: 'system', content: composeSystemPrompt(petName, kernel, 'journal', mood) },
           { role: 'user', content: userPrompt },
         ],
         max_tokens: JOURNAL_MAX_TOKENS,
@@ -428,6 +431,86 @@ export async function generateJournalEntry(
     return cleanJournal(raw);
   } catch (err) {
     console.warn('[nom][llm][journal] error:', (err as Error).message);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ── Autonomous tick — decision call ─────────────────────────────────────
+//
+// Per-tick "should I do anything right now?" LLM call. Strict JSON
+// output (server-side via response_format when supported, fallback
+// parser is forgiving). Returns null on any failure — the tick layer
+// reads null as "stay silent", which is the desired safe default.
+
+// Thinking-class models eat a lot of headroom inside <think> blocks
+// before they ever emit content. Underset budget → response comes back
+// content=null / reasoning_content=null. 2048 is enough for the
+// largest decision response (~200 chars JSON) plus a multi-paragraph
+// reasoning trace.
+const DECISION_MAX_TOKENS = 2048;
+const DECISION_TIMEOUT_MS = 45_000;
+
+export async function decideAutonomousAction(
+  settings: LlmSettings,
+  ctx: DecisionContext,
+): Promise<Decision | null> {
+  if (!settings.enabled || !settings.endpoint || !settings.model) return null;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DECISION_TIMEOUT_MS);
+
+  const { system, user } = buildDecisionMessages(ctx);
+
+  try {
+    const res = await fetch(settings.endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {}),
+      },
+      body: JSON.stringify({
+        model: settings.model,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+        max_tokens: DECISION_MAX_TOKENS,
+        // Lower temperature than dialogue — the decision is structural,
+        // we want it predictable. The persona's spice still survives
+        // because the system prompt is character-rich.
+        temperature: 0.6,
+        // Note: deliberately NOT setting response_format on the
+        // decision call. Thinking-class endpoints (MiniMax M2, Qwen3
+        // *-Thinking, etc.) tend to return content=null when json mode
+        // is forced — the reasoning path expects to think first, then
+        // speak, and a strict json_object schema collides with that.
+        // The prompt already specifies the JSON schema in plain text +
+        // our parser tolerates markdown fences and <think>-wrapped
+        // output, so behaviour is the same on servers that DO support
+        // response_format.
+        ...NO_THINK_FLAGS,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      console.warn('[nom][llm][decide] non-2xx:', res.status);
+      return null;
+    }
+
+    const data = await res.json() as {
+      choices?: Array<{ message?: { content?: string | null; reasoning_content?: string | null } }>;
+    };
+    const raw = pickContent(data.choices?.[0]?.message);
+    if (process.env['NOM_DEBUG_DECIDE']) {
+      console.log('[nom][llm][decide][debug] raw:', JSON.stringify(raw)?.slice(0, 400));
+    }
+    if (!raw) return null;
+    return parseDecision(raw);
+  } catch (err) {
+    console.warn('[nom][llm][decide] error:', (err as Error).message);
     return null;
   } finally {
     clearTimeout(timer);

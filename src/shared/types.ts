@@ -193,6 +193,19 @@ export interface LastTickRecord {
   decision: 'silent' | 'observation' | 'speak' | 'mood_shift' | 'ask' | 'note' | 'dream';
 }
 
+/**
+ * The pet spontaneously decided to speak. Pushed to the renderer via
+ * `nom:autonomy:bubble` so the bubble UI can show it without the user
+ * having to click anything. `kind` lets future polish (styling, dwell
+ * time, animation) branch on the trigger.
+ */
+export interface AutonomyBubbleEvent {
+  text: string;
+  mood: Mood;
+  kind: 'autonomous' | 'return' | 'question';
+  durationMs: number;
+}
+
 export interface NomSettings {
   wanderEnabled: boolean;
   activePetSlug: string | null;

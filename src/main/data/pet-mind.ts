@@ -30,6 +30,7 @@ const NOTES_FILE = path.join(DIR, 'notes.jsonl');
 const MOOD_FILE  = path.join(DIR, 'mood.json');
 const ABS_FILE   = path.join(DIR, 'absences.json');
 const TICK_FILE  = path.join(DIR, 'last-tick.json');
+const BUBBLE_FILE = path.join(DIR, 'bubble-count.json');
 
 /** Notes file size cap. Beyond this, callers should archive. We don't
  * implement archive rotation in Phase 1 since a normal user takes
@@ -199,4 +200,63 @@ export async function writeLastTick(rec: LastTickRecord): Promise<void> {
   } catch (err) {
     console.error('[nom][pet-mind] writeLastTick failed:', err);
   }
+}
+
+// ── Bubble rate-limit counter ──────────────────────────────────────────
+//
+// Tracks how many unprompted bubbles the pet has fired today, so the
+// decision engine can refuse to speak past the per-day cap. Keyed by
+// local date — automatically resets at midnight by virtue of the date
+// mismatch.
+
+interface BubbleCountFile {
+  date: string;     // YYYY-MM-DD
+  count: number;
+  lastAt: string | null;
+}
+
+function todayLocalKey(now = Date.now()): string {
+  const d = new Date(now);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+async function readBubbleCountRaw(): Promise<BubbleCountFile> {
+  try {
+    const text = await fs.readFile(BUBBLE_FILE, 'utf8');
+    const parsed = JSON.parse(text);
+    return {
+      date: typeof parsed.date === 'string' ? parsed.date : todayLocalKey(),
+      count: Number.isFinite(parsed.count) ? Math.max(0, Math.floor(parsed.count)) : 0,
+      lastAt: typeof parsed.lastAt === 'string' ? parsed.lastAt : null,
+    };
+  } catch {
+    return { date: todayLocalKey(), count: 0, lastAt: null };
+  }
+}
+
+export async function readTodayBubbleCount(): Promise<{ count: number; lastAt: string | null }> {
+  const f = await readBubbleCountRaw();
+  if (f.date !== todayLocalKey()) {
+    // New day; the on-disk count is stale.
+    return { count: 0, lastAt: null };
+  }
+  return { count: f.count, lastAt: f.lastAt };
+}
+
+export async function incrementBubbleCount(now = Date.now()): Promise<number> {
+  ensureDir();
+  const today = todayLocalKey(now);
+  const f = await readBubbleCountRaw();
+  const nextCount = f.date === today ? f.count + 1 : 1;
+  const next: BubbleCountFile = {
+    date: today,
+    count: nextCount,
+    lastAt: new Date(now).toISOString(),
+  };
+  try {
+    await fs.writeFile(BUBBLE_FILE, JSON.stringify(next, null, 2), 'utf8');
+  } catch (err) {
+    console.error('[nom][pet-mind] incrementBubbleCount failed:', err);
+  }
+  return nextCount;
 }

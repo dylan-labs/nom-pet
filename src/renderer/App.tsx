@@ -334,6 +334,18 @@ export function App() {
     });
   }, []);
 
+  // Pet decided to speak on its own (autonomy tick / homecoming
+  // reaction). Same bubble surface as user-triggered dialogue — we
+  // intentionally don't add special chrome, the surprise is the point.
+  useEffect(() => {
+    return window.nom.onAutonomyBubble((e) => {
+      const header = e.kind === 'return'   ? '回来啦'
+                   : e.kind === 'question' ? '问一句'
+                                           : '想到一件事';
+      showBubble(header, e.text, e.durationMs);
+    });
+  }, []);
+
   useEffect(() => {
     return window.nom.onSession((e) => {
       if (e.kind !== 'start') return;
