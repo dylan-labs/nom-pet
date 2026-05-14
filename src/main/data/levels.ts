@@ -48,6 +48,13 @@ const LEVELS: LevelEntry[] = [
   { tier: '战神', sub: null,  threshold: 50_000_000_000_000_000 },
 ];
 
+/** Badge text ("行家 III" / "战神") for the level at the given index, or null past the table. */
+export function levelBadgeAt(index: number): string | null {
+  const e = LEVELS[index];
+  if (!e) return null;
+  return e.sub ? `${e.tier} ${e.sub}` : e.tier;
+}
+
 export function computeLevel(cumulative: number): LevelInfo {
   let idx = 0;
   for (let i = LEVELS.length - 1; i >= 0; i--) {

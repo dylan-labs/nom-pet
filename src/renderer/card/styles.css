@@ -1,0 +1,13 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #0a0a0a;
+  overflow: hidden;
+  width: 1080px;
+  height: 1080px;
+}
+
+#card-root {
+  width: 1080px;
+  height: 1080px;
+}

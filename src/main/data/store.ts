@@ -2,8 +2,8 @@ import fs from 'node:fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import type { DailyReport, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, StateSnapshot } from '../../shared/types';
-import { computeLevel } from './levels';
+import type { DailyReport, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, StateSnapshot, Weekday, WeeklyDayBucket, WeeklyReport } from '../../shared/types';
+import { computeLevel, levelBadgeAt } from './levels';
 import { computeSeal, verifySeal } from './seal';
 
 export interface WindowPosition {
@@ -47,6 +47,7 @@ const DEFAULT_SETTINGS: NomSettings = {
     claudeCode: true,
     codex: true,
   },
+  petName: 'Mochi',
 };
 
 const DEFAULT_STATE: NomState = {
@@ -72,6 +73,38 @@ function dayKeyOffset(daysAgo: number): string {
   const d = new Date();
   d.setDate(d.getDate() - daysAgo);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function formatDateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+const WEEKDAY_LABELS: Weekday[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+/** ISO 8601 week-numbering year + week (Mon-anchored, Thursday's year wins). */
+function isoWeek(date: Date): { year: number; week: number } {
+  const target = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = target.getUTCDay() || 7; // Mon=1..Sun=7
+  target.setUTCDate(target.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((target.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return { year: target.getUTCFullYear(), week };
+}
+
+/** The 7 Date objects (Mon..Sun) of the ISO week containing `anchor`. */
+function weekRange(anchor: Date): Date[] {
+  const d = new Date(anchor);
+  d.setHours(0, 0, 0, 0);
+  const isoDay = d.getDay() || 7; // Mon=1..Sun=7
+  const monday = new Date(d);
+  monday.setDate(d.getDate() - (isoDay - 1));
+  const days: Date[] = [];
+  for (let i = 0; i < 7; i++) {
+    const x = new Date(monday);
+    x.setDate(monday.getDate() + i);
+    days.push(x);
+  }
+  return days;
 }
 
 export class Store {
@@ -164,6 +197,9 @@ export class Store {
                 ? parsed.settings.sources.codex
                 : DEFAULT_SETTINGS.sources.codex,
             },
+            petName: typeof parsed.settings?.petName === 'string' && parsed.settings.petName.trim().length > 0
+              ? parsed.settings.petName.trim().slice(0, 24)
+              : DEFAULT_SETTINGS.petName,
           },
         };
       }
@@ -265,6 +301,93 @@ export class Store {
   markDailyReportShown(): void {
     this.state.lastDailyReportShownOn = todayKey();
     this.scheduleWrite();
+  }
+
+  /**
+   * Aggregate everything the weekly card needs. The card UI must not do its
+   * own math — that way the same numbers show up here and in any future
+   * "current week" bubble.
+   */
+  computeWeeklyReport(now: Date = new Date()): WeeklyReport {
+    const thisWeek = weekRange(now);
+    const lastWeekAnchor = new Date(now);
+    lastWeekAnchor.setDate(now.getDate() - 7);
+    const lastWeek = weekRange(lastWeekAnchor);
+
+    const daily: WeeklyDayBucket[] = thisWeek.map((date, i) => {
+      const dateKey = formatDateKey(date);
+      return {
+        weekday: WEEKDAY_LABELS[i]!,
+        dateKey,
+        tokens: this.state.tokens.daily[dateKey] ?? 0,
+      };
+    });
+
+    const thisWeekTokens = daily.reduce((s, d) => s + d.tokens, 0);
+    const lastWeekTokens = lastWeek.reduce(
+      (s, date) => s + (this.state.tokens.daily[formatDateKey(date)] ?? 0),
+      0,
+    );
+
+    const changePct = lastWeekTokens > 0
+      ? (thisWeekTokens - lastWeekTokens) / lastWeekTokens
+      : null;
+
+    const fedDays = daily.filter((d) => d.tokens > 0).length;
+
+    // Streak: consecutive fed days ending today. If today is still empty
+    // (early morning), look back from yesterday so we don't surprise the
+    // user with a broken streak before they've even opened the editor.
+    let streak = 0;
+    const todayHasFed = (this.state.tokens.daily[todayKey()] ?? 0) > 0;
+    for (let i = todayHasFed ? 0 : 1; i < 60; i++) {
+      if ((this.state.tokens.daily[dayKeyOffset(i)] ?? 0) > 0) streak++;
+      else break;
+    }
+
+    const peakDay = daily.reduce<WeeklyDayBucket | null>((best, d) => {
+      if (d.tokens <= 0) return best;
+      if (!best || d.tokens > best.tokens) return d;
+      return best;
+    }, null);
+
+    const { year, week } = isoWeek(now);
+    const level = computeLevel(this.state.tokens.cumulative);
+    const nextRankTokensAway = level.nextThreshold !== null
+      ? Math.max(0, level.nextThreshold - this.state.tokens.cumulative)
+      : null;
+    const nextLevelLabel = levelBadgeAt(level.index + 1);
+
+    return {
+      weekNumber: week,
+      year,
+      weekStart: formatDateKey(thisWeek[0]!),
+      weekEnd: formatDateKey(thisWeek[6]!),
+      daily,
+      thisWeekTokens,
+      lastWeekTokens,
+      changePct,
+      peakDay,
+      fedDays,
+      streak,
+      level,
+      nextLevelLabel,
+      nextRankTokensAway,
+      petName: this.state.settings.petName,
+      uptimeMs: this.state.startedAt > 0 ? Math.max(0, now.getTime() - this.state.startedAt) : 0,
+    };
+  }
+
+  getPetName(): string {
+    return this.state.settings.petName;
+  }
+
+  setPetName(name: string): NomSettings {
+    const trimmed = (name ?? '').trim().slice(0, 24);
+    if (trimmed.length === 0) return this.getSettings();
+    this.state.settings.petName = trimmed;
+    this.scheduleWrite();
+    return this.getSettings();
   }
 
   setWindowPosition(pos: WindowPosition): void {

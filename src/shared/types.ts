@@ -84,6 +84,7 @@ export interface NomSettings {
   activePetSlug: string | null;
   llm: LlmSettings | null;
   sources: SourceSettings;
+  petName: string;
 }
 
 export type DialogueTrigger =
@@ -102,6 +103,33 @@ export interface DailyReport {
   weekAvgTokens: number;
 }
 
+export type Weekday = 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat' | 'Sun';
+
+export interface WeeklyDayBucket {
+  weekday: Weekday;
+  dateKey: string;
+  tokens: number;
+}
+
+export interface WeeklyReport {
+  weekNumber: number;          // ISO week, 1..53
+  year: number;                // ISO week-year
+  weekStart: string;           // Monday YYYY-MM-DD
+  weekEnd: string;             // Sunday YYYY-MM-DD
+  daily: WeeklyDayBucket[];    // length 7, Mon..Sun
+  thisWeekTokens: number;
+  lastWeekTokens: number;
+  changePct: number | null;    // (this-last)/last, null if last week was 0
+  peakDay: WeeklyDayBucket | null;
+  fedDays: number;             // days this week with tokens > 0 (0..7)
+  streak: number;              // consecutive fed days ending today
+  level: LevelInfo;
+  nextLevelLabel: string | null;  // e.g. "行家 III", or null at max rank
+  nextRankTokensAway: number | null;
+  petName: string;
+  uptimeMs: number;               // since first install (state.startedAt)
+}
+
 export interface DialogueContext {
   trigger: DialogueTrigger;
   todayTokens?: number;
@@ -116,4 +144,17 @@ export interface DialogueContext {
 export interface InstalledPetInfo {
   slug: string;
   displayName: string;
+}
+
+export type WeeklyCardStyle = 'gameboy' | 'terminal';
+
+export interface WeeklyCardPayload {
+  style: WeeklyCardStyle;
+  report: WeeklyReport;
+}
+
+export interface WeeklyCardExportResult {
+  ok: boolean;
+  filePath?: string;
+  error?: string;
 }

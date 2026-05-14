@@ -1,5 +1,6 @@
-import { app, BrowserWindow, screen, ipcMain, Menu, globalShortcut } from 'electron';
+import { app, BrowserWindow, screen, ipcMain, Menu, globalShortcut, clipboard, shell, dialog } from 'electron';
 import path from 'node:path';
+import fs from 'node:fs/promises';
 import { ClaudeSource } from './data/claude-source';
 import { CodexSource } from './data/codex-source';
 import { Store, type WindowPosition } from './data/store';
@@ -7,7 +8,7 @@ import { scanRecentHistory } from './data/today-scan';
 import { scanCodexRecentHistory } from './data/codex-today-scan';
 import { loadUserPet, listInstalledPets } from './data/pet-loader';
 import { generateLine } from './data/llm';
-import type { DailyReport, DialogueContext, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SessionEvent, SourceId, StateSnapshot, ThinkingEvent, TokensEvent } from '../shared/types';
+import type { DailyReport, DialogueContext, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SessionEvent, SourceId, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
 
 const WIN_SIZE = 200;
 const MOVE_DEBOUNCE_MS = 400;
@@ -15,6 +16,10 @@ const SUMMON_SHORTCUT = 'CommandOrControl+Alt+N';
 
 let petWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
+let cardWindow: BrowserWindow | null = null;
+// Staged for the card renderer to pull via IPC once the window opens. Lives
+// here (not in Store) because it's an in-flight UI payload, not persistent state.
+let pendingCardPayload: WeeklyCardPayload | null = null;
 const claudeSource = new ClaudeSource();
 const codexSource = new CodexSource();
 const store = new Store();
@@ -138,6 +143,8 @@ function createPetWindow() {
     if (!petWindow) return;
     const settings = store.getSettings();
     const installed = await listInstalledPets();
+    const weekly = store.computeWeeklyReport();
+    const canExportCard = weekly.thisWeekTokens > 0;
 
     const petSubmenu: Electron.MenuItemConstructorOptions[] = installed.length === 0
       ? [{ label: '（未安装宠物）', enabled: false }]
@@ -197,6 +204,17 @@ function createPetWindow() {
       },
       { label: '选择宠物', submenu: petSubmenu },
       { type: 'separator' },
+      {
+        label: canExportCard ? '导出本周战绩' : '导出本周战绩（本周还没吃 token）',
+        enabled: canExportCard,
+        click: () => { void exportWeeklyCard('gameboy'); },
+      },
+      {
+        label: '导出本周战绩 (Hacker Mode)',
+        enabled: canExportCard,
+        click: () => { void exportWeeklyCard('terminal'); },
+      },
+      { type: 'separator' },
       { label: '设置…', accelerator: 'CmdOrCtrl+,', click: () => openSettingsWindow() },
       { label: '关闭宠物', click: () => app.quit() },
     ]);
@@ -207,6 +225,85 @@ function createPetWindow() {
     petWindow.loadURL(process.env['ELECTRON_RENDERER_URL']);
   } else {
     petWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+  }
+}
+
+/**
+ * Render the weekly card in an off-screen 1080×1080 BrowserWindow, capture
+ * the page as a PNG, save to ~/Desktop and copy to clipboard.
+ *
+ * The card window pulls its data via IPC (`nom:card:getPayload`) once it
+ * mounts, then signals back with `nom:card:ready` after painting — only
+ * then do we capturePage, so we don't catch an unstyled flash.
+ */
+async function exportWeeklyCard(style: WeeklyCardStyle): Promise<WeeklyCardExportResult> {
+  if (cardWindow && !cardWindow.isDestroyed()) {
+    return { ok: false, error: '上一张战绩卡还在导出中,稍等一下' };
+  }
+
+  const report = store.computeWeeklyReport();
+  if (report.thisWeekTokens <= 0) {
+    return { ok: false, error: '本周还没吃到 token,卡片没东西可写' };
+  }
+
+  pendingCardPayload = { style, report };
+
+  cardWindow = new BrowserWindow({
+    width: 1080,
+    height: 1080,
+    show: false,
+    frame: false,
+    transparent: false,
+    resizable: false,
+    skipTaskbar: true,
+    backgroundColor: '#000000',
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  const cardUrl = process.env['ELECTRON_RENDERER_URL']
+    ? `${process.env['ELECTRON_RENDERER_URL']}/card.html?style=${style}`
+    : `file://${path.join(__dirname, '../renderer/card.html')}?style=${style}`;
+
+  const readyPromise = new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      ipcMain.removeListener('nom:card:ready', handler);
+      reject(new Error('战绩卡渲染超时(>8s)'));
+    }, 8000);
+    const handler = (event: Electron.IpcMainEvent) => {
+      if (event.sender === cardWindow?.webContents) {
+        clearTimeout(timeout);
+        ipcMain.removeListener('nom:card:ready', handler);
+        resolve();
+      }
+    };
+    ipcMain.on('nom:card:ready', handler);
+  });
+
+  try {
+    await cardWindow.loadURL(cardUrl);
+    await readyPromise;
+
+    const image = await cardWindow.webContents.capturePage();
+    const png = image.toPNG();
+    const filename = `nom-WK${String(report.weekNumber).padStart(2, '0')}-${report.year}-${style}.png`;
+    const filePath = path.join(app.getPath('desktop'), filename);
+    await fs.writeFile(filePath, png);
+    clipboard.writeImage(image);
+    shell.showItemInFolder(filePath);
+    return { ok: true, filePath };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[nom] export weekly card failed:', err);
+    dialog.showErrorBox('nom · 导出失败', msg);
+    return { ok: false, error: msg };
+  } finally {
+    pendingCardPayload = null;
+    if (cardWindow && !cardWindow.isDestroyed()) cardWindow.destroy();
+    cardWindow = null;
   }
 }
 
@@ -321,6 +418,10 @@ async function main() {
     report: store.computeDailyReport(),
   }));
   ipcMain.handle('nom:report:markShown', (): void => store.markDailyReportShown());
+  ipcMain.handle('nom:report:exportWeekly', (_, style: WeeklyCardStyle): Promise<WeeklyCardExportResult> => {
+    return exportWeeklyCard(style);
+  });
+  ipcMain.handle('nom:card:getPayload', (): WeeklyCardPayload | null => pendingCardPayload);
 
   let dragOrigin: { mouseX: number; mouseY: number; winX: number; winY: number } | null = null;
   ipcMain.on('nom:drag:begin', (_, { x, y }: { x: number; y: number }) => {

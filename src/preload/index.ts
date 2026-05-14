@@ -1,8 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { DailyReport, DialogueContext, InstalledPetInfo, LevelInfo, LevelUpEvent, LlmSettings, LoadedPet, NomSettings, SessionEvent, StateSnapshot, ThinkingEvent, TokensEvent } from '../shared/types';
+import type { DailyReport, DialogueContext, InstalledPetInfo, LevelInfo, LevelUpEvent, LlmSettings, LoadedPet, NomSettings, SessionEvent, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
 
 const api = {
-  version: '0.0.11',
+  version: '0.0.21',
   getState(): Promise<StateSnapshot> {
     return ipcRenderer.invoke('nom:state:get') as Promise<StateSnapshot>;
   },
@@ -98,6 +98,18 @@ const api = {
   },
   markDailyReportShown(): Promise<void> {
     return ipcRenderer.invoke('nom:report:markShown') as Promise<void>;
+  },
+  exportWeeklyCard(style: WeeklyCardStyle): Promise<WeeklyCardExportResult> {
+    return ipcRenderer.invoke('nom:report:exportWeekly', style) as Promise<WeeklyCardExportResult>;
+  },
+  // Used inside the card renderer only: pull the pre-staged payload that
+  // the main process queued before opening the card window.
+  getCardPayload(): Promise<WeeklyCardPayload | null> {
+    return ipcRenderer.invoke('nom:card:getPayload') as Promise<WeeklyCardPayload | null>;
+  },
+  // Card renderer signals "I've painted the final frame, you can screenshot".
+  cardReady(): void {
+    ipcRenderer.send('nom:card:ready');
   },
 };
 

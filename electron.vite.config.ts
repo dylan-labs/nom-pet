@@ -33,6 +33,7 @@ export default defineConfig({
         input: {
           index: 'src/renderer/index.html',
           settings: 'src/renderer/settings.html',
+          card: 'src/renderer/card.html',
         },
       },
     },
