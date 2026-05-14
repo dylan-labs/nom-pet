@@ -173,7 +173,13 @@ export function SettingsApp() {
             <Field label="Endpoint" placeholder="https://api.openai.com/v1/chat/completions"
                    value={llmEndpoint} onChange={setLlmEndpoint} />
             <Field label="Model" placeholder="gpt-4o-mini"
-                   value={llmModel} onChange={setLlmModel} />
+                   value={llmModel} onChange={setLlmModel}
+                   hint={
+                     <>
+                       建议选 <code>mini</code> / <code>chat</code> / <code>instruct</code> 类的快速模型。
+                       Thinking 类（<code>o1</code> / <code>r1</code> / <code>M2</code> / <code>qwq</code>）会先思考再回答，宠物一句嘴碎话可能要等好几秒。
+                     </>
+                   } />
             <Field label="API Key" placeholder="可选 — 不需要鉴权可留空" type="password"
                    value={llmKey} onChange={setLlmKey} />
 
@@ -233,10 +239,11 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 }
 
 function Field({
-  label, placeholder, value, onChange, type = 'text',
+  label, placeholder, value, onChange, type = 'text', hint,
 }: {
   label: string; placeholder?: string; value: string;
   onChange: (v: string) => void; type?: 'text' | 'password';
+  hint?: React.ReactNode;
 }) {
   return (
     <label className="field">
@@ -251,6 +258,7 @@ function Field({
         autoCorrect="off"
         onChange={(e) => onChange(e.target.value)}
       />
+      {hint && <span className="field-hint">{hint}</span>}
     </label>
   );
 }

@@ -7,7 +7,7 @@ import { Store, type WindowPosition } from './data/store';
 import { scanRecentHistory } from './data/today-scan';
 import { scanCodexRecentHistory } from './data/codex-today-scan';
 import { loadUserPet, listInstalledPets } from './data/pet-loader';
-import { generateLine } from './data/llm';
+import { generateLine, testLlm } from './data/llm';
 import type { DailyReport, DialogueContext, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SessionEvent, SourceId, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
 
 const WIN_SIZE = 200;
@@ -23,6 +23,10 @@ let pendingCardPayload: WeeklyCardPayload | null = null;
 const claudeSource = new ClaudeSource();
 const codexSource = new CodexSource();
 const store = new Store();
+// In-memory only — used to flavour LLM dialogue ("you haven't fed me in 20
+// minutes"). Reset on launch by design: persisting would let cross-session
+// gaps leak in, which makes no sense ("you haven't fed me in 3 days").
+let lastFedAt: number | null = null;
 
 /**
  * Reconcile source watchers with the current settings — start the ones that
@@ -400,18 +404,20 @@ async function main() {
   });
   ipcMain.handle('nom:llm:test', async (_, llm: LlmSettings): Promise<{ ok: boolean; ms: number; error?: string; sample?: string }> => {
     const start = Date.now();
-    const result = await generateLine(
-      { ...llm, enabled: true },
-      { trigger: 'idle-click', hour: new Date().getHours() },
-    );
+    const result = await testLlm({ ...llm, enabled: true });
     const ms = Date.now() - start;
-    if (result == null) return { ok: false, ms, error: '调用失败：检查 endpoint / model / API key 是否正确' };
-    return { ok: true, ms, sample: result };
+    if (!result.ok) return { ok: false, ms, error: result.error };
+    return { ok: true, ms, sample: result.sample };
   });
   ipcMain.handle('nom:dialogue:line', async (_, ctx: DialogueContext): Promise<string | null> => {
-    const llm = store.getSettings().llm;
-    if (!llm) return null;
-    return generateLine(llm, ctx);
+    const settings = store.getSettings();
+    if (!settings.llm) return null;
+    const enriched: DialogueContext = {
+      ...ctx,
+      petName: settings.petName,
+      minutesSinceLastFed: lastFedAt == null ? null : Math.floor((Date.now() - lastFedAt) / 60000),
+    };
+    return generateLine(settings.llm, enriched);
   });
   ipcMain.handle('nom:report:get', (): { pending: boolean; report: DailyReport | null } => ({
     pending: store.isDailyReportPending(),
@@ -475,6 +481,7 @@ async function main() {
   // request); only the running token counter and animation react.
   function onTokens(event: { delta: number; source: SourceId; timestamp: number }) {
     const { snapshot, levelUp } = store.addTokens(event.delta);
+    lastFedAt = event.timestamp;
     petWindow?.webContents.send('nom:tokens', { ...event, snapshot } satisfies TokensEvent);
     if (levelUp) {
       petWindow?.webContents.send('nom:level:up', levelUp);

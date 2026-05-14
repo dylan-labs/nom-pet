@@ -147,6 +147,14 @@ export interface DialogueContext {
   level?: LevelInfo;     // current pet level (passed when relevant for flavour)
   levelUp?: LevelUpEvent;
   report?: DailyReport;  // populated for trigger === 'daily-report'
+  /** Pet's chosen name. Injected by main process from settings. */
+  petName?: string;
+  /**
+   * Minutes since the last token event (any source) was observed in this
+   * session. Injected by main process. null/undefined = no feeding yet
+   * since launch.
+   */
+  minutesSinceLastFed?: number | null;
 }
 
 export interface InstalledPetInfo {

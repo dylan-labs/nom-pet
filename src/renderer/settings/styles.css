@@ -320,6 +320,20 @@ html, body, #settings-root {
   letter-spacing: 0.2px;
 }
 
+.field-hint {
+  font-size: 11px;
+  color: var(--text-subtle);
+  line-height: 1.5;
+}
+
+.field-hint code {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 10.5px;
+  padding: 1px 4px;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 3px;
+}
+
 .field-input {
   -webkit-app-region: no-drag;
   -webkit-user-select: text;
