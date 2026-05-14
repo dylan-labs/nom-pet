@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import type { DailyReport, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, StateSnapshot, Weekday, WeeklyDayBucket, WeeklyReport } from '../../shared/types';
+import type { DailyReport, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SoulKernel, SoulPreset, StateSnapshot, Weekday, WeeklyDayBucket, WeeklyReport } from '../../shared/types';
 import { computeLevel, levelBadgeAt } from './levels';
 import { computeSeal, verifySeal } from './seal';
 
@@ -12,7 +12,7 @@ export interface WindowPosition {
   displayId?: number;
 }
 
-const SCHEMA_VERSION = 3; // bumped at 0.0.20 — added HMAC seal on cumulative + lastLevelIndex.
+const SCHEMA_VERSION = 4; // v4 (0.0.23): added settings.onboarded + settings.soulKernel for the Soul Kernel feature.
 
 export interface NomState {
   schemaVersion: number;
@@ -48,7 +48,22 @@ const DEFAULT_SETTINGS: NomSettings = {
     codex: true,
   },
   petName: 'Mochi',
+  onboarded: false,
+  soulKernel: null,
 };
+
+const VALID_SOUL_PRESETS: SoulPreset[] = [
+  'tsundere-architect', 'old-tcm-doctor', 'tang-concubine',
+  'cursed-doll', 'aloof-otaku', 'philosopher-stray', 'custom',
+];
+
+function parseSoulKernel(raw: unknown): SoulKernel | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as { preset?: unknown; text?: unknown };
+  if (typeof o.preset !== 'string' || !VALID_SOUL_PRESETS.includes(o.preset as SoulPreset)) return null;
+  if (typeof o.text !== 'string' || o.text.trim().length === 0) return null;
+  return { preset: o.preset as SoulPreset, text: o.text.trim().slice(0, 200) };
+}
 
 const DEFAULT_STATE: NomState = {
   schemaVersion: SCHEMA_VERSION,
@@ -200,6 +215,10 @@ export class Store {
             petName: typeof parsed.settings?.petName === 'string' && parsed.settings.petName.trim().length > 0
               ? parsed.settings.petName.trim().slice(0, 24)
               : DEFAULT_SETTINGS.petName,
+            onboarded: typeof parsed.settings?.onboarded === 'boolean'
+              ? parsed.settings.onboarded
+              : DEFAULT_SETTINGS.onboarded,
+            soulKernel: parseSoulKernel(parsed.settings?.soulKernel),
           },
         };
       }
@@ -436,6 +455,42 @@ export class Store {
 
   setLlmSettings(llm: LlmSettings | null): NomSettings {
     this.state.settings.llm = llm;
+    this.scheduleWrite();
+    return this.getSettings();
+  }
+
+  isOnboarded(): boolean {
+    return this.state.settings.onboarded;
+  }
+
+  /**
+   * Persist the user's first-launch choices atomically. Marks onboarding
+   * complete only after both name and kernel are validated.
+   */
+  completeOnboarding(petName: string, kernel: SoulKernel): NomSettings {
+    const trimmedName = (petName ?? '').trim().slice(0, 24);
+    if (trimmedName.length === 0) return this.getSettings();
+    const trimmedKernel: SoulKernel = {
+      preset: kernel.preset,
+      text: kernel.text.trim().slice(0, 200),
+    };
+    if (trimmedKernel.text.length === 0) return this.getSettings();
+    this.state.settings.petName = trimmedName;
+    this.state.settings.soulKernel = trimmedKernel;
+    this.state.settings.onboarded = true;
+    this.scheduleWrite();
+    return this.getSettings();
+  }
+
+  setSoulKernel(kernel: SoulKernel | null): NomSettings {
+    if (kernel == null) {
+      this.state.settings.soulKernel = null;
+    } else {
+      this.state.settings.soulKernel = {
+        preset: kernel.preset,
+        text: kernel.text.trim().slice(0, 200),
+      };
+    }
     this.scheduleWrite();
     return this.getSettings();
   }

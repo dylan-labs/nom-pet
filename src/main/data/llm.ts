@@ -1,4 +1,5 @@
-import type { DialogueContext, LlmSettings } from '../../shared/types';
+import type { DialogueContext, LlmSettings, SoulKernel } from '../../shared/types';
+import { composeSystemPrompt } from './soul';
 
 const REQUEST_TIMEOUT_MS = 20000;
 // Thinking-model servers often ignore enable_thinking/reasoning_effort and
@@ -26,20 +27,6 @@ const NO_THINK_FLAGS = {
   thinking: { type: 'disabled' },
   thinking_config: { thinking_budget: 0 },
 } as const;
-
-function systemPromptFor(petName: string): string {
-  return `你叫 ${petName}，一只住在用户桌面上的虚拟宠物，吃用户消耗的 AI tokens 为食。
-
-性格：活泼、贪吃、嘴碎，偶尔记仇。
-说话规则（必须严格遵守）：
-- **直接输出最终答案，不要任何思考过程，不要 <think> 标签、不要"让我想想"之类的前言**
-- **只说一句话，最多 15 个汉字**
-- 第一人称（我饿了 / 我盯着你）
-- 不要 emoji、引号、Markdown、动作描述
-- 不要"作为 AI"，你是 ${petName}，是只小宠物
-- 不要追问用户
-- 用户如果问你叫什么，就说"我叫 ${petName}"，别说 nom 或别的名字`;
-}
 
 /** Qualitative size buckets so the model isn't staring at a naked number. */
 function describeAmount(n: number): string {
@@ -163,6 +150,7 @@ function cleanLine(raw: string, maxChars: number): string {
 export async function generateLine(
   settings: LlmSettings,
   ctx: DialogueContext,
+  kernel: SoulKernel | null = null,
 ): Promise<string | null> {
   if (!settings.enabled || !settings.endpoint || !settings.model) return null;
 
@@ -179,7 +167,7 @@ export async function generateLine(
       body: JSON.stringify({
         model: settings.model,
         messages: [
-          { role: 'system', content: systemPromptFor(ctx.petName ?? 'nom') },
+          { role: 'system', content: composeSystemPrompt(ctx.petName ?? 'nom', kernel) },
           { role: 'user', content: userPromptFor(ctx) + '\n/no_think' },
         ],
         max_tokens: MAX_TOKENS,
@@ -225,6 +213,8 @@ export async function generateLine(
  */
 export async function testLlm(
   settings: LlmSettings,
+  petName = 'nom',
+  kernel: SoulKernel | null = null,
 ): Promise<{ ok: true; sample: string } | { ok: false; error: string }> {
   if (!settings.endpoint) return { ok: false, error: '缺少 Endpoint' };
   if (!settings.model)    return { ok: false, error: '缺少 Model' };
@@ -244,7 +234,7 @@ export async function testLlm(
         body: JSON.stringify({
           model: settings.model,
           messages: [
-            { role: 'system', content: systemPromptFor('nom') },
+            { role: 'system', content: composeSystemPrompt(petName, kernel) },
             { role: 'user', content: userPromptFor({ trigger: 'idle-click', hour: new Date().getHours() }) + '\n/no_think' },
           ],
           max_tokens: MAX_TOKENS,

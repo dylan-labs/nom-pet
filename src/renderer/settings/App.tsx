@@ -1,6 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import type { NomApi } from '../../preload';
-import type { LevelInfo, LlmSettings, NomSettings } from '../../shared/types';
+import type { LevelInfo, LlmSettings, NomSettings, SoulPreset } from '../../shared/types';
+
+interface PresetMeta { id: Exclude<SoulPreset, 'custom'>; label: string; blurb: string; }
+// Mirrors src/renderer/onboarding/App.tsx and src/main/data/soul.ts. Keep
+// the three in sync (a tiny bit of duplication is fine for now; if it gets
+// painful, lift this into a shared module).
+const SOUL_PRESETS: PresetMeta[] = [
+  { id: 'tsundere-architect', label: '傲娇前架构师', blurb: '阴阳怪气，看不起调用 AI 写代码的人' },
+  { id: 'old-tcm-doctor',     label: '老中医爷爷',   blurb: '慢悠悠养生派，"虚火上升"挂嘴边' },
+  { id: 'tang-concubine',     label: '阴阳大唐妃子', blurb: '半文半白，"哀家"上口，戏多' },
+  { id: 'cursed-doll',        label: '邪典恐怖玩偶', blurb: '阴森低语，怨念附体' },
+  { id: 'aloof-otaku',        label: '高冷死宅',     blurb: '社恐二次元中二台词' },
+  { id: 'philosopher-stray',  label: '哲学家流浪猫', blurb: '存在主义馋猫' },
+];
 
 declare global {
   interface Window {
@@ -36,6 +49,10 @@ export function SettingsApp() {
   const [llmKey, setLlmKey] = useState('');
   const [test, setTest] = useState<TestState>({ kind: 'idle' });
   const [savedFlash, setSavedFlash] = useState(false);
+  // Soul kernel form
+  const [soulName, setSoulName] = useState('');
+  const [soulPreset, setSoulPreset] = useState<SoulPreset | null>(null);
+  const [soulSavedFlash, setSoulSavedFlash] = useState(false);
 
   useEffect(() => {
     void Promise.all([
@@ -53,6 +70,10 @@ export function SettingsApp() {
         setLlmModel(s.llm.model);
         setLlmKey(s.llm.apiKey ?? '');
       }
+      setSoulName(s.petName);
+      // Snap to a valid preset if soul kernel exists; otherwise leave null
+      // so the user can pick (and the button stays disabled until they do).
+      setSoulPreset(s.soulKernel?.preset ?? null);
     });
   }, []);
 
@@ -73,6 +94,21 @@ export function SettingsApp() {
   function flashSaved() {
     setSavedFlash(true);
     setTimeout(() => setSavedFlash(false), 1800);
+  }
+
+  async function saveSoul() {
+    const trimmedName = soulName.trim();
+    if (trimmedName.length === 0 || soulPreset === null) return;
+    // Reuse the onboarding-complete IPC: it already knows how to resolve
+    // canonical preset text from soul.ts and writes name + kernel atomically.
+    // It's idempotent — onboarded=true stays true on repeat calls.
+    const next = await window.nom.completeOnboarding({
+      petName: trimmedName,
+      preset: soulPreset,
+    });
+    setSettings(next);
+    setSoulSavedFlash(true);
+    setTimeout(() => setSoulSavedFlash(false), 1800);
   }
 
   async function saveLlm() {
@@ -160,6 +196,39 @@ export function SettingsApp() {
           <Row label="自动游走" sub="闲置时宠物会自己在桌面溜达">
             <Toggle checked={settings.wanderEnabled} onChange={toggleWander} />
           </Row>
+        </section>
+
+        {/* Soul kernel — sit above AI 台词 because the soul precedes the mouth */}
+        <section className="card">
+          <div className="card-title">灵魂设定</div>
+          <Field label="名字" placeholder="比如：大圣 / Mochi"
+                 value={soulName} onChange={setSoulName} />
+          <div className="preset-list">
+            {SOUL_PRESETS.map((p) => (
+              <button
+                key={p.id}
+                className={`preset-row ${soulPreset === p.id ? 'preset-row--on' : ''}`}
+                onClick={() => setSoulPreset(p.id)}
+                type="button"
+              >
+                <span className={`preset-dot ${soulPreset === p.id ? 'preset-dot--on' : ''}`} />
+                <span className="preset-meta">
+                  <span className="preset-label">{p.label}</span>
+                  <span className="preset-blurb">{p.blurb}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="card-footer">
+            <span className={`saved-flash ${soulSavedFlash ? 'saved-flash--show' : ''}`}>已保存</span>
+            <button
+              className="btn btn-primary"
+              onClick={saveSoul}
+              disabled={soulName.trim().length === 0 || soulPreset === null}
+            >
+              保存灵魂
+            </button>
+          </div>
         </section>
 
         {/* LLM */}

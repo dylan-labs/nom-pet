@@ -87,12 +87,36 @@ export interface LlmSettings {
   apiKey: string | null;  // null for endpoints that don't need auth
 }
 
+export type SoulPreset =
+  | 'tsundere-architect'
+  | 'old-tcm-doctor'
+  | 'tang-concubine'
+  | 'cursed-doll'
+  | 'aloof-otaku'
+  | 'philosopher-stray'
+  | 'custom';
+
+export interface SoulKernel {
+  preset: SoulPreset;
+  /**
+   * Personality text injected into every LLM system prompt. For built-in
+   * presets this is the preset's canonical text (kept here so the kernel
+   * is self-contained even if preset definitions evolve). For 'custom',
+   * the user's own writing — hard-capped at 200 chars.
+   */
+  text: string;
+}
+
 export interface NomSettings {
   wanderEnabled: boolean;
   activePetSlug: string | null;
   llm: LlmSettings | null;
   sources: SourceSettings;
   petName: string;
+  /** Has the user completed the first-launch onboarding (name + soul)? */
+  onboarded: boolean;
+  /** Pet personality. null until onboarding is done. */
+  soulKernel: SoulKernel | null;
 }
 
 export type DialogueTrigger =

@@ -8,7 +8,8 @@ import { scanRecentHistory } from './data/today-scan';
 import { scanCodexRecentHistory } from './data/codex-today-scan';
 import { loadUserPet, listInstalledPets } from './data/pet-loader';
 import { generateLine, testLlm } from './data/llm';
-import type { DailyReport, DialogueContext, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SessionEvent, SourceId, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
+import type { DailyReport, DialogueContext, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SessionEvent, SoulKernel, SoulPreset, SourceId, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
+import { presetText } from './data/soul';
 
 const WIN_SIZE = 200;
 const MOVE_DEBOUNCE_MS = 400;
@@ -17,6 +18,7 @@ const SUMMON_SHORTCUT = 'CommandOrControl+Alt+N';
 let petWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
 let cardWindow: BrowserWindow | null = null;
+let onboardingWindow: BrowserWindow | null = null;
 // Staged for the card renderer to pull via IPC once the window opens. Lives
 // here (not in Store) because it's an in-flight UI payload, not persistent state.
 let pendingCardPayload: WeeklyCardPayload | null = null;
@@ -346,6 +348,53 @@ function openSettingsWindow(): void {
   }
 }
 
+/**
+ * Opens the first-launch onboarding window. Closing this window without
+ * completing the flow (red X / Cmd-Q) quits the app — onboarding is mandatory
+ * per spec §2.1.
+ */
+function openOnboardingWindow(): void {
+  if (onboardingWindow && !onboardingWindow.isDestroyed()) {
+    onboardingWindow.show();
+    onboardingWindow.focus();
+    return;
+  }
+
+  onboardingWindow = new BrowserWindow({
+    width: 460,
+    height: 620,
+    title: 'nom · 欢迎',
+    backgroundColor: '#f5f5f7',
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  onboardingWindow.once('ready-to-show', () => onboardingWindow?.show());
+  onboardingWindow.on('closed', () => {
+    onboardingWindow = null;
+    // If the user closed the window WITHOUT completing onboarding, quit.
+    // Mandatory ritual: there's no "use Mochi by default" escape hatch.
+    if (!store.isOnboarded()) {
+      app.quit();
+    }
+  });
+
+  if (process.env['ELECTRON_RENDERER_URL']) {
+    onboardingWindow.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/onboarding.html`);
+  } else {
+    onboardingWindow.loadFile(path.join(__dirname, '../renderer/onboarding.html'));
+  }
+}
+
 // --- Main ------------------------------------------------------------------
 
 async function main() {
@@ -402,9 +451,46 @@ async function main() {
     petWindow?.webContents.send('nom:settings:changed', next);
     return next;
   });
+  ipcMain.handle('nom:settings:setName', (_, name: string): NomSettings => {
+    const next = store.setPetName(name);
+    petWindow?.webContents.send('nom:settings:changed', next);
+    return next;
+  });
+  ipcMain.handle('nom:settings:setSoul', (_, kernel: SoulKernel | null): NomSettings => {
+    const next = store.setSoulKernel(kernel);
+    petWindow?.webContents.send('nom:settings:changed', next);
+    return next;
+  });
+  // ── Onboarding ───────────────────────────────────────────────────────
+  ipcMain.handle('nom:onboarding:isPending', (): boolean => !store.isOnboarded());
+  ipcMain.handle('nom:onboarding:complete', (_, args: { petName: string; preset: SoulPreset; customText?: string }): NomSettings => {
+    // Resolve the kernel text: preset → canonical; custom → user-supplied.
+    let text: string;
+    if (args.preset === 'custom') {
+      text = (args.customText ?? '').trim();
+    } else {
+      text = presetText(args.preset) ?? '';
+    }
+    if (!text) {
+      // Defensive: never let onboarding complete with an empty kernel.
+      return store.getSettings();
+    }
+    const next = store.completeOnboarding(args.petName, { preset: args.preset, text });
+    // Close the onboarding window now that state is persisted, and hand
+    // off to the regular pet experience.
+    if (onboardingWindow && !onboardingWindow.isDestroyed()) {
+      onboardingWindow.close();
+    }
+    if (!petWindow || petWindow.isDestroyed()) {
+      createPetWindow();
+    }
+    petWindow?.webContents.send('nom:settings:changed', next);
+    return next;
+  });
   ipcMain.handle('nom:llm:test', async (_, llm: LlmSettings): Promise<{ ok: boolean; ms: number; error?: string; sample?: string }> => {
+    const settings = store.getSettings();
     const start = Date.now();
-    const result = await testLlm({ ...llm, enabled: true });
+    const result = await testLlm({ ...llm, enabled: true }, settings.petName, settings.soulKernel);
     const ms = Date.now() - start;
     if (!result.ok) return { ok: false, ms, error: result.error };
     return { ok: true, ms, sample: result.sample };
@@ -417,7 +503,7 @@ async function main() {
       petName: settings.petName,
       minutesSinceLastFed: lastFedAt == null ? null : Math.floor((Date.now() - lastFedAt) / 60000),
     };
-    return generateLine(settings.llm, enriched);
+    return generateLine(settings.llm, enriched, settings.soulKernel);
   });
   ipcMain.handle('nom:report:get', (): { pending: boolean; report: DailyReport | null } => ({
     pending: store.isDailyReportPending(),
@@ -467,7 +553,11 @@ async function main() {
     );
   });
 
-  createPetWindow();
+  if (store.isOnboarded()) {
+    createPetWindow();
+  } else {
+    openOnboardingWindow();
+  }
 
   // Global shortcut to summon the pet back to the current screen if it ends
   // up somewhere invisible (different display, full-screen app on top, etc).

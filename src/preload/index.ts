@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { DailyReport, DialogueContext, InstalledPetInfo, LevelInfo, LevelUpEvent, LlmSettings, LoadedPet, NomSettings, SessionEvent, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
+import type { DailyReport, DialogueContext, InstalledPetInfo, LevelInfo, LevelUpEvent, LlmSettings, LoadedPet, NomSettings, SessionEvent, SoulKernel, SoulPreset, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
 
 const api = {
   version: '0.0.22',
@@ -110,6 +110,19 @@ const api = {
   // Card renderer signals "I've painted the final frame, you can screenshot".
   cardReady(): void {
     ipcRenderer.send('nom:card:ready');
+  },
+  // ── Onboarding (first-launch ritual) ─────────────────────────────────
+  isOnboardingPending(): Promise<boolean> {
+    return ipcRenderer.invoke('nom:onboarding:isPending') as Promise<boolean>;
+  },
+  completeOnboarding(p: { petName: string; preset: SoulPreset; customText?: string }): Promise<NomSettings> {
+    return ipcRenderer.invoke('nom:onboarding:complete', p) as Promise<NomSettings>;
+  },
+  setSoulKernel(kernel: SoulKernel | null): Promise<NomSettings> {
+    return ipcRenderer.invoke('nom:settings:setSoul', kernel) as Promise<NomSettings>;
+  },
+  setPetName(name: string): Promise<NomSettings> {
+    return ipcRenderer.invoke('nom:settings:setName', name) as Promise<NomSettings>;
   },
 };
 
