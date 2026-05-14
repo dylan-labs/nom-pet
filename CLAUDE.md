@@ -70,14 +70,25 @@
 - **正式版（v1.0）**：原创像素角色，单帧 64×64 或 128×128，PNG 透明背景；状态分目录：`assets/sprites/<state>/<frame>.png`。每个状态多帧做循环动画，CSS animation 切帧。
 - **可选**：未来若需要更复杂动画再考虑 Lottie。
 
-### 8. "冒泡说话"（不变）
+### 8. "冒泡说话"
 - **机制**：默认走纯本地预置台词库（成本 + 隐私 + 离线三大原则）。可选启用 LLM 生成动态台词，但必须**用户主动开启**且**只走两种通道**：
   - **本地 LLM**（推荐）：检测到本机 Ollama / mlx-lm 在跑就用，模型在用户机器上推理，零外部网络。
   - **用户自带 API Key（BYOK）**：用户在设置里粘贴自己的 Anthropic / OpenAI key，nom 用这个 key 直接调远端。**绝不内置任何官方 key**（成本不可控）。
-  - 任何模式下，**只发用量统计 / 时间这类元数据，绝不发 prompt/response 内容**。
+  - 任何模式下，**只发用量统计 / 时间 / 宠物名这类元数据，绝不发 prompt/response 内容**。
 - **触发条件**：点击宠物 / 里程碑（每 10K token）/ 闲置（>30min 无事件）/ 启动 / 退出 / 每日小结。
 - **台词存放**：`src/renderer/dialogue/<trigger>.json`，方便后续翻译多语言。
 - **气泡 UI**：渲染在宠物正上方的 SVG / div，3 秒后自动消失。
+- **Prompt 构造**（`src/main/data/llm.ts`）：
+  - System prompt 模板化注入 `petName`（从 settings 取），保证宠物自我介绍的名字一致。
+  - User prompt 根据 trigger 拼装情境 + 段位语气提示 + 当日吃喝量定性描述（"才一小口" / "吃撑了" / "暴饮暴食"）+ 距上次喂食时长。**裸数字不直接给模型**，避免它念出来。
+  - `idle-click` 明令"绝不提具体 token 数字"，只用情境信息调语气。
+- **Thinking 模型兼容**：现在常见的 OpenAI 兼容端点既有非推理模型（gpt-4o-mini、deepseek-chat、qwen2.5-instruct）也有推理模型（o1、deepseek-reasoner、MiniMax-M2、Qwen3-thinking、qwq）。后者会先输出 `<think>...</think>` 才说人话，对宠物这种"一句嘴碎"场景天然不友好（慢、贵、token 全花在思考里）。处理策略：
+  1. **请求里同时塞多种厂商的关 thinking 字段**：`enable_thinking: false`（Qwen3/MiniMax）、`reasoning_effort: 'none'`（OpenAI o-series）、`chat_template_kwargs: {enable_thinking: false}`（vLLM 部署）、`thinking: {type: 'disabled'}`、`thinking_config: {thinking_budget: 0}`（Gemini 兼容）。OpenAI 兼容服务忽略未知字段，所以一锅炖无副作用。
+  2. **user prompt 末尾追加 `\n/no_think`** —— Qwen3 等模型支持的 prompt 级开关。
+  3. **`MAX_TOKENS = 1024`**：即使上面全失效、模型坚持要思考，也得给它留够预算，否则 content 会被截断成 null。
+  4. **解析回退**：`message.content` 为 null/空 时读 `message.reasoning_content`；`cleanLine` 砍掉所有 `</think>` 之前的内容；最后再字符级硬截到 26 字（日报 60 字）。
+  5. **测试连接**：`testLlm()` 区分 HTTP 错误、JSON 错误、网络/超时、空响应等，给设置 UI 真实错误而不是通用"调用失败"。
+  - 文档面建议用户**优先选非 thinking 模型**（速度差距大），设置界面有提示。
 
 ### 9. 分发：electron-builder
 - **targets**：`dmg`（macOS）+ `nsis`（Windows）。

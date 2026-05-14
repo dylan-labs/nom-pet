@@ -65,20 +65,15 @@ npx petdex install boba       # 或 doraemon、goku-blue……
 
 默认 nom 用本地预置台词文件 —— 完全离线、可重复、零网络。如果你想要上下文感知的台词（比如 *"凌晨两点了还在用 Claude，你这个 prompt 写得有点暴躁啊"*），可以接任何 **OpenAI 协议的 chat-completions 端点** —— 你自己的 Anthropic key、本机 Ollama、自建模型……只要对得上 OpenAI 接口就行。
 
-1. 右键宠物 → 勾上 **AI 台词**
-2. 右键 → **打开配置文件**（会打开 `~/.nom/state.json`）
-3. 编辑 `llm` 那一节：
-   ```json
-   "llm": {
-     "enabled": true,
-     "endpoint": "https://api.anthropic.com/v1/...",
-     "model": "claude-haiku-4-5-20251001",
-     "apiKey": "sk-..."
-   }
-   ```
-4. 退出 nom 重新启动。
+1. 右键宠物 → **设置…**（或快捷键 `⌘,` / `Ctrl+,`）
+2. 找到 **AI 台词** 那张卡片，把 **启用** 拨上
+3. 填 **Endpoint** / **Model** / **API Key**（不需要鉴权的端点 key 可以留空）
+4. 点 **测试连接** —— 配对了会预览一句宠物真实回复；没配对会给出具体错误（HTTP 状态、空响应、超时等）
+5. 点 **保存 AI 配置**
 
-**隐私契约**：只发元数据（触发类型、时段、token 数字）出去，**绝不发**你的 prompt 和 Claude 的回复。任何 LLM 调用失败 / 超时 → 静默回退本地台词，宠物照常工作。
+**模型选型**：nom 每次只要一句话，所以 `mini` / `chat` / `instruct` 类模型和推理类模型（`o1` / `r1` / `M2` / `qwq` 等）的速度差距明显 —— 推理模型每次都要先想一遍才肯说话。nom 已经在请求里跨厂商发了 `enable_thinking: false` / `reasoning_effort: 'none'` 等关 thinking 字段，服务端也回退读 `reasoning_content`，但**要快**还是建议用非推理模型。
+
+**隐私契约**：只发元数据（触发类型、时段、token 数字、宠物名字）出去，**绝不发**你的 prompt 和 Claude 的回复。任何 LLM 调用失败 / 超时 → 静默回退本地台词，宠物照常工作。
 
 ## 开发
 

@@ -65,20 +65,15 @@ Plus a global shortcut: `⌘⌥N` (Mac) / `Ctrl+Alt+N` (Win) to summon the pet t
 
 By default nom speaks from a local template file — fully offline, deterministic, no network. If you want context-aware lines (e.g. *"凌晨两点了还在用 Claude，你这个 prompt 写得有点暴躁啊"*), wire it to any **OpenAI-compatible chat-completions endpoint** — your own Anthropic key, an Ollama instance, a self-hosted model, anything that speaks the OpenAI API.
 
-1. Right-click the pet → enable **AI 台词**
-2. Right-click → **打开配置文件** (opens `~/.nom/state.json`)
-3. Edit the `llm` block:
-   ```json
-   "llm": {
-     "enabled": true,
-     "endpoint": "https://api.anthropic.com/v1/...",
-     "model": "claude-haiku-4-5-20251001",
-     "apiKey": "sk-..."
-   }
-   ```
-4. Quit and relaunch nom.
+1. Right-click the pet → **设置…** (or press `⌘,` / `Ctrl+,`)
+2. Find the **AI 台词** card, flip the toggle on
+3. Fill in **Endpoint** / **Model** / **API Key** (key is optional for endpoints that don't require auth)
+4. Click **测试连接** — you'll get a real reply preview if it's wired up correctly, or a specific error (HTTP code, empty content, timeout, etc) if not
+5. Click **保存 AI 配置**
 
-**Privacy contract**: only metadata (trigger type, time of day, token counts) ever leaves your machine. Your prompts and Claude's responses are **never** sent to the LLM endpoint. Failed / timed-out LLM calls silently fall back to the local templates — the pet keeps working even if your endpoint goes down.
+**Model picking**: nom asks for a one-sentence reply, so the speed difference between a `mini`/`chat`/`instruct` model and a reasoning model (`o1`, `r1`, `M2`, `qwq`…) is large — thinking models burn extra tokens on internal reasoning before saying a single line. nom does send `enable_thinking: false` / `reasoning_effort: 'none'` and friends across the major vendor dialects, and falls back to `reasoning_content` if the server emits the reply there, but if you want snappy bubbles, pick a non-reasoning model.
+
+**Privacy contract**: only metadata (trigger type, time of day, token counts, pet name) ever leaves your machine. Your prompts and Claude's responses are **never** sent to the LLM endpoint. Failed / timed-out LLM calls silently fall back to the local templates — the pet keeps working even if your endpoint goes down.
 
 ## Develop
 
