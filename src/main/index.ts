@@ -1,6 +1,7 @@
 import { app, BrowserWindow, screen, ipcMain, Menu, globalShortcut, clipboard, shell, dialog } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import { ClaudeSource } from './data/claude-source';
 import { CodexSource } from './data/codex-source';
 import { Store, type WindowPosition } from './data/store';
@@ -255,11 +256,17 @@ function createPetWindow() {
     const weekly = store.computeWeeklyReport();
     const canExportCard = weekly.thisWeekTokens > 0;
 
-    // "切换宠物" submenu — only worth showing when the user has more
-    // than one pet installed; otherwise it's a 1-radio noop that clutters
-    // the menu. Settings still exposes the picker for edge cases.
-    const petSubmenu: Electron.MenuItemConstructorOptions[] = installed.length > 1
-      ? installed.map((p) => ({
+    // "切换宠物" submenu is ALWAYS present so users with zero pets still
+    // have a path to install more (otherwise they'd never discover the
+    // feature exists). Layout:
+    //   - 0 pets: a disabled "（未安装宠物）" item explaining the state
+    //   - 1+ pets: radios for each, current one checked
+    //   - Always: separator + "打开宠物文件夹" so the user has somewhere
+    //             to drop new PetDex packs without hunting for the path.
+    const petsDir = path.join(os.homedir(), '.codex', 'pets');
+    const petSubmenu: Electron.MenuItemConstructorOptions[] = installed.length === 0
+      ? [{ label: '（未安装宠物）', enabled: false }]
+      : installed.map((p) => ({
           label: p.displayName,
           type: 'radio' as const,
           checked: (settings.activePetSlug ?? installed[0]!.slug) === p.slug,
@@ -267,8 +274,20 @@ function createPetWindow() {
             store.setActivePetSlug(p.slug);
             petWindow?.webContents.send('nom:pet:changed');
           },
-        }))
-      : [];
+        }));
+    petSubmenu.push(
+      { type: 'separator' },
+      {
+        label: '📁  打开宠物文件夹',
+        click: async () => {
+          // Create on demand so first-time users don't get a "no such
+          // directory" error — they just see an empty Finder window
+          // where they can drop packs.
+          try { await fs.mkdir(petsDir, { recursive: true }); } catch { /* ignore */ }
+          void shell.openPath(petsDir);
+        },
+      },
+    );
 
     // Build top-level items. Toggles (游走 / AI 台词 / 数据源) used to
     // live here too — they're now Settings-only because the right-click
@@ -293,9 +312,7 @@ function createPetWindow() {
         ],
       },
     ];
-    if (petSubmenu.length > 0) {
-      items.push({ label: '🐾  切换宠物', submenu: petSubmenu });
-    }
+    items.push({ label: '🐾  切换宠物', submenu: petSubmenu });
     items.push(
       { type: 'separator' },
       { label: '⚙️  设置', accelerator: 'CmdOrCtrl+,', click: () => openSettingsWindow() },
