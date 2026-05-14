@@ -19,8 +19,12 @@ const SEARCH_DIRS = [
 /**
  * PetDex sprite convention (decoded from MIT-licensed crafter-station/petdex):
  *   192 × 208 px frames, laid out 8 cols × 9 rows in a 1536 × 1872 sheet.
- *   Row 0: idle (6f), Row 1: running (8f), Row 3: waving (4f),
- *   Row 4: jumping (5f), Row 6: waiting (6f). Mapped to nom's 5 states.
+ *   Row 0: idle (6f), Row 1: running-right (8f), Row 2: running-left (8f),
+ *   Row 3: waving (4f), Row 4: jumping (5f), Row 5: failed (8f),
+ *   Row 6: waiting (6f), Row 7: running-generic (6f), Row 8: review (6f).
+ *   Mapped to nom's 6 states. Directional states (walking/dragging) read
+ *   row 1 by default and row 2 when facing left — per the maintainer,
+ *   downstream apps should pull the correct row, not CSS-flip.
  */
 const PETDEX_COLS = 8;
 
@@ -38,6 +42,8 @@ function isPetDexFormat(raw: unknown): boolean {
 }
 
 function petdexToNative(raw: any): PetConfig {
+  const runRight = range(1 * PETDEX_COLS, 8);
+  const runLeft = range(2 * PETDEX_COLS, 8);
   return {
     id: raw.id ?? 'user',
     name: raw.displayName ?? raw.id ?? 'Pet',
@@ -47,8 +53,8 @@ function petdexToNative(raw: any): PetConfig {
     displayScale: 0.4,
     states: {
       idle:     { frames: range(0 * PETDEX_COLS, 6), fps: 5.5 },
-      walking:  { frames: range(1 * PETDEX_COLS, 8), fps: 7 },
-      dragging: { frames: range(1 * PETDEX_COLS, 8), fps: 12 },
+      walking:  { frames: runRight, framesLeft: runLeft, fps: 7 },
+      dragging: { frames: runRight, framesLeft: runLeft, fps: 12 },
       talking:  { frames: range(3 * PETDEX_COLS, 4), fps: 5.7 },
       eating:   { frames: range(4 * PETDEX_COLS, 5), fps: 6.0 },
       sleeping: { frames: range(6 * PETDEX_COLS, 6), fps: 4.0 },

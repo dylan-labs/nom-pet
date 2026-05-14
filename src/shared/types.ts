@@ -5,6 +5,14 @@ export interface StateSnapshot {
 
 export interface PetStateConfig {
   frames: number[];
+  /**
+   * Optional left-facing frame indexes. When present, the renderer uses
+   * these directly when facing left (rather than CSS-flipping `frames`).
+   * Per petdex spec: row 1 is running-right and row 2 is running-left;
+   * single-direction (native) packs that only draw one row may omit this
+   * field and the renderer falls back to `scaleX(-1)`.
+   */
+  framesLeft?: number[];
   fps: number;
 }
 

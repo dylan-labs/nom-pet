@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { DailyReport, DialogueContext, InstalledPetInfo, LevelInfo, LevelUpEvent, LlmSettings, LoadedPet, NomSettings, SessionEvent, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
 
 const api = {
-  version: '0.0.21',
+  version: '0.0.22',
   getState(): Promise<StateSnapshot> {
     return ipcRenderer.invoke('nom:state:get') as Promise<StateSnapshot>;
   },

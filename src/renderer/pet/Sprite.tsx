@@ -39,7 +39,16 @@ export function Sprite({ state, facing = 'right' }: SpriteProps) {
 
   const config = active.config;
   const stateConfig = config.states[state] ?? config.states.idle!;
-  const frames = stateConfig.frames;
+  // Per petdex spec, left-facing locomotion lives in its own sprite row
+  // (row 2 for running-left). If the pack provides framesLeft, honor it
+  // directly so we display the artist's intended frames; otherwise fall
+  // back to CSS scaleX(-1) for legacy single-direction packs (e.g. nom's
+  // bundled default).
+  const useLeftFrames = facing === 'left'
+    && Array.isArray(stateConfig.framesLeft)
+    && stateConfig.framesLeft.length > 0;
+  const frames = useLeftFrames ? stateConfig.framesLeft! : stateConfig.frames;
+  const shouldFlip = facing === 'left' && !useLeftFrames;
   const fps = Math.max(0.1, stateConfig.fps);
   const displayScale = config.displayScale ?? 2;
 
@@ -87,7 +96,7 @@ export function Sprite({ state, facing = 'right' }: SpriteProps) {
         backgroundSize: `${sheetW}px auto`,
         backgroundRepeat: 'no-repeat',
         imageRendering,
-        transform: `scaleX(${facing === 'left' ? -1 : 1})`,
+        transform: shouldFlip ? 'scaleX(-1)' : undefined,
       }}
     />
   );
