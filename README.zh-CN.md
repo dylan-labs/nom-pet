@@ -102,6 +102,10 @@ nom 在隐私上是偏执的：
 2. **从不读取或发送 prompt/response 内容**。nom 只解析 JSONL 里的 `usage.{input,output,cache_*}_tokens` 数字。开 AI 台词后，发给 LLM 端点的也只有元数据（触发类型、时间、数字），**绝不**包含对话本身。
 3. **所有状态本地**。`~/.nom/state.json` 是人可读 JSON，删掉就完全重置。
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=dylan-labs/nom-pet&type=Date)](https://www.star-history.com/#dylan-labs/nom-pet&Date)
+
 ## 许可证
 
 源码用 [MIT](./LICENSE)。打包进去的 sprite 素材有各自的许可证，见 [`CREDITS.md`](./CREDITS.md)。

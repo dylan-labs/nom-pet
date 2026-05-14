@@ -102,6 +102,10 @@ nom is paranoid by design:
 2. **No prompt/response content ever read or sent.** nom only parses `usage.{input,output,cache_*}_tokens` numbers from JSONL. When AI dialogue is on, only metadata (trigger, time, counts) goes to your LLM endpoint — never the actual conversation.
 3. **All state local.** `~/.nom/state.json` is human-readable JSON. Nuke the dir to fully reset.
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=dylan-labs/nom-pet&type=Date)](https://www.star-history.com/#dylan-labs/nom-pet&Date)
+
 ## License
 
 [MIT](./LICENSE) for source code. Bundled sprite assets carry their own licenses — see [`CREDITS.md`](./CREDITS.md).
