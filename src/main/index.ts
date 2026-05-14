@@ -4,11 +4,11 @@ import fs from 'node:fs/promises';
 import { ClaudeSource } from './data/claude-source';
 import { CodexSource } from './data/codex-source';
 import { Store, type WindowPosition } from './data/store';
-import { scanRecentHistory } from './data/today-scan';
-import { scanCodexRecentHistory } from './data/codex-today-scan';
+import { scanRecentHistory, scanLifetimeHistory } from './data/today-scan';
+import { scanCodexRecentHistory, scanCodexLifetimeHistory } from './data/codex-today-scan';
 import { loadUserPet, listInstalledPets } from './data/pet-loader';
 import { generateLine, testLlm } from './data/llm';
-import type { DailyReport, DialogueContext, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SessionEvent, SoulKernel, SoulPreset, SourceId, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
+import type { DailyReport, DialogueContext, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SessionEvent, SoulKernel, SoulPreset, SourceId, StateReconciledEvent, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
 import { presetText } from './data/soul';
 
 const WIN_SIZE = 200;
@@ -39,6 +39,58 @@ function reconcileSources(): void {
   const s = store.getSettings().sources;
   if (s.claudeCode) claudeSource.start(); else claudeSource.stop();
   if (s.codex)      codexSource.start();  else codexSource.stop();
+}
+
+/**
+ * Background self-heal: sweep every Claude + Codex transcript and use the
+ * lifetime weighted total as a floor for `cumulative`. If the user deleted
+ * `~/.nom/state.json` (or it got corrupted), their level reappears within
+ * a few seconds of next launch instead of disappearing forever.
+ *
+ * Fire-and-forget — never blocks the pet window. The cumulative bump and
+ * any backfilled daily buckets are pushed to the renderer via
+ * `nom:state:reconciled` if the pet window already exists; otherwise the
+ * renderer will pick the new values up via its mount-time `getState()` /
+ * `getLevel()` queries (e.g. after onboarding completes).
+ */
+async function runLifetimeReconcile(): Promise<void> {
+  try {
+    const [claude, codex] = await Promise.all([
+      scanLifetimeHistory(),
+      scanCodexLifetimeHistory(),
+    ]);
+    // Backfill any pre-7-day-window dates the recent scan didn't cover.
+    // setDayBaseline uses Math.max, so this never decreases an existing
+    // count — safe to call for every day we see.
+    const allDays = new Set<string>([
+      ...Object.keys(claude.perDay),
+      ...Object.keys(codex.perDay),
+    ]);
+    for (const day of allDays) {
+      const combined = (claude.perDay[day] ?? 0) + (codex.perDay[day] ?? 0);
+      store.setDayBaseline(day, combined);
+    }
+    const lifetimeTotal = claude.total + codex.total;
+    const { changed, snapshot, level } = store.reconcileCumulativeFloor(lifetimeTotal);
+    if (changed) {
+      console.log(
+        `[nom] lifetime reconcile bumped cumulative → ${snapshot.cumulative} ` +
+        `(claude=${claude.filesScanned}f/${claude.total}, codex=${codex.filesScanned}f/${codex.total})`
+      );
+      if (petWindow && !petWindow.isDestroyed()) {
+        petWindow.webContents.send('nom:state:reconciled', {
+          snapshot, level, reason: 'lifetime-scan',
+        } satisfies StateReconciledEvent);
+      }
+    } else {
+      console.log(
+        `[nom] lifetime reconcile: cumulative already ≥ lifetime total ` +
+        `(${snapshot.cumulative} vs ${lifetimeTotal}); no change`
+      );
+    }
+  } catch (err) {
+    console.error('[nom] lifetime reconcile failed:', err);
+  }
 }
 
 
@@ -429,6 +481,13 @@ async function main() {
   } catch (err) {
     console.error('[nom] history scan failed:', err);
   }
+
+  // Self-healing recovery: lifetime sweep against the canonical transcript
+  // files. Runs in the background so it never blocks the pet window — if
+  // it finishes after the renderer is mounted, the result lands via
+  // `nom:state:reconciled`; if before, the renderer's mount-time queries
+  // pick up the fresh values.
+  void runLifetimeReconcile();
 
   ipcMain.handle('nom:state:get', (): StateSnapshot => store.snapshot());
   ipcMain.handle('nom:level:get', (): LevelInfo => store.getLevel());

@@ -284,6 +284,27 @@ export class Store {
   }
 
   /**
+   * Raise cumulative to at least `floor` if our recorded value is lower.
+   * Used to recover from a wiped/tampered state.json by reseeding from the
+   * canonical transcript files (Claude + Codex), which the user can't
+   * accidentally delete the same way they can delete ~/.nom/.
+   *
+   * lastLevelIndex is silently reseeded to match the new cumulative — this
+   * is recovery, not progress, so no level-up event fires. Returns whether
+   * anything actually changed so the caller can decide whether to push an
+   * update to the renderer.
+   */
+  reconcileCumulativeFloor(floor: number): { changed: boolean; snapshot: StateSnapshot; level: LevelInfo } {
+    if (floor > this.state.tokens.cumulative) {
+      this.state.tokens.cumulative = floor;
+      this.state.lastLevelIndex = computeLevel(floor).index;
+      this.scheduleWrite();
+      return { changed: true, snapshot: this.snapshot(), level: this.getLevel() };
+    }
+    return { changed: false, snapshot: this.snapshot(), level: this.getLevel() };
+  }
+
+  /**
    * Yesterday's recap. Returns null if there's no data for yesterday
    * (user wasn't active / weekend / holiday) — we'd rather stay quiet
    * than fabricate a "you fed me 0 tokens, sad" message.

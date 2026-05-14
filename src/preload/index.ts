@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { DailyReport, DialogueContext, InstalledPetInfo, LevelInfo, LevelUpEvent, LlmSettings, LoadedPet, NomSettings, SessionEvent, SoulKernel, SoulPreset, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
+import type { DailyReport, DialogueContext, InstalledPetInfo, LevelInfo, LevelUpEvent, LlmSettings, LoadedPet, NomSettings, SessionEvent, SoulKernel, SoulPreset, StateReconciledEvent, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
 
 const api = {
   version: '0.0.22',
@@ -79,6 +79,16 @@ const api = {
     ipcRenderer.on('nom:level:up', listener);
     return () => {
       ipcRenderer.removeListener('nom:level:up', listener);
+    };
+  },
+  // Silent state recovery (background lifetime scan rebuilt cumulative
+  // from transcripts). NOT a level-up — renderer should update numbers
+  // without bubbles or animations.
+  onStateReconciled(callback: (event: StateReconciledEvent) => void): () => void {
+    const listener = (_: Electron.IpcRendererEvent, event: StateReconciledEvent) => callback(event);
+    ipcRenderer.on('nom:state:reconciled', listener);
+    return () => {
+      ipcRenderer.removeListener('nom:state:reconciled', listener);
     };
   },
   setWanderEnabled(enabled: boolean): Promise<NomSettings> {

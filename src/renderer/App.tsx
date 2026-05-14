@@ -309,6 +309,17 @@ export function App() {
     });
   }, []);
 
+  // Silent recovery: lifetime scan in main process restored cumulative
+  // from canonical transcript files (e.g. user deleted ~/.nom/). Update
+  // numbers in place without a bubble or animation.
+  useEffect(() => {
+    return window.nom.onStateReconciled((e) => {
+      setCumulative(e.snapshot.cumulative);
+      setToday(e.snapshot.today);
+      setLevel(e.level);
+    });
+  }, []);
+
   useEffect(() => {
     return window.nom.onSession((e) => {
       if (e.kind !== 'start') return;

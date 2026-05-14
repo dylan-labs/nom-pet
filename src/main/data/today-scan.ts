@@ -62,6 +62,62 @@ export async function scanTodayHistory(): Promise<ScanResult> {
 }
 
 /**
+ * Lifetime sweep: read every JSONL we can find under `~/.claude/projects/`
+ * with no mtime/timestamp filter, returning the all-time weighted total
+ * plus per-day buckets for every date encountered.
+ *
+ * Slower than `scanRecentHistory` (no mtime skip), so callers should run
+ * this in the background after the pet window is already up. Used to
+ * rebuild cumulative + daily when `~/.nom/state.json` has been wiped or
+ * truncated — we don't want a user's level to disappear just because they
+ * deleted `~/.nom/`.
+ */
+export async function scanLifetimeHistory(): Promise<{
+  total: number;
+  perDay: Record<string, number>;
+  filesScanned: number;
+}> {
+  const perDay: Record<string, number> = {};
+  let total = 0;
+  let scanned = 0;
+
+  const files = await listJsonl(ROOT);
+  for (const file of files) {
+    let text: string;
+    try {
+      text = await fs.readFile(file, 'utf8');
+    } catch {
+      continue;
+    }
+    scanned++;
+
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      let event: any;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (event?.type !== 'assistant') continue;
+      const u = event.message?.usage;
+      if (!u) continue;
+      const weighted = computeWeightedTokens(u);
+      total += weighted;
+      // Per-day bucket only when timestamp is parseable; some old events
+      // may lack one but should still count toward cumulative.
+      const ts = Date.parse(event.timestamp);
+      if (Number.isFinite(ts)) {
+        const dayKey = dayKeyFromMs(ts);
+        perDay[dayKey] = (perDay[dayKey] ?? 0) + weighted;
+      }
+    }
+  }
+
+  return { total, perDay, filesScanned: scanned };
+}
+
+/**
  * Scan the last `days` calendar days (including today) and return per-day
  * weighted token totals. Lets us seed `tokens.daily` with history so the
  * daily-recap bubble has data to compare against on the user's first launch

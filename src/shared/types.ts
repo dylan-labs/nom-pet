@@ -75,6 +75,18 @@ export interface LevelUpEvent {
   cumulative: number;
 }
 
+/**
+ * Pushed after a background reconcile of cumulative/level against the
+ * canonical transcript files. This is NOT a level-up — it's recovery from
+ * a wiped ~/.nom/state.json — so the renderer should update silently
+ * (no bubble, no animation).
+ */
+export interface StateReconciledEvent {
+  snapshot: StateSnapshot;
+  level: LevelInfo;
+  reason: 'lifetime-scan';
+}
+
 export interface SourceSettings {
   claudeCode: boolean;
   codex: boolean;

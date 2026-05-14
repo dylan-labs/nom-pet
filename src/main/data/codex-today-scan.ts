@@ -85,6 +85,55 @@ export async function scanCodexTodayHistory(): Promise<ScanResult> {
   return { tokens: recent.perDay[todayK] ?? 0, filesScanned: recent.filesScanned };
 }
 
+/**
+ * Lifetime sweep of Codex sessions — mirrors `scanLifetimeHistory` for
+ * Claude. No mtime/timestamp filter; returns all-time total plus per-day
+ * buckets keyed by event timestamp.
+ */
+export async function scanCodexLifetimeHistory(): Promise<{
+  total: number;
+  perDay: Record<string, number>;
+  filesScanned: number;
+}> {
+  const perDay: Record<string, number> = {};
+  let total = 0;
+  let scanned = 0;
+
+  const files = await listJsonl(ROOT);
+  for (const file of files) {
+    let text: string;
+    try {
+      text = await fs.readFile(file, 'utf8');
+    } catch {
+      continue;
+    }
+    scanned++;
+
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      let event: any;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (event?.type !== 'event_msg') continue;
+      if (event?.payload?.type !== 'token_count') continue;
+      const u = event.payload?.info?.last_token_usage;
+      if (!u) continue;
+      const weighted = computeWeighted(u);
+      total += weighted;
+      const ts = Date.parse(event.timestamp);
+      if (Number.isFinite(ts)) {
+        const dayKey = dayKeyFromMs(ts);
+        perDay[dayKey] = (perDay[dayKey] ?? 0) + weighted;
+      }
+    }
+  }
+
+  return { total, perDay, filesScanned: scanned };
+}
+
 /** Per-day weighted Codex tokens for the last `days` calendar days (incl. today). */
 export async function scanCodexRecentHistory(days: number): Promise<{
   perDay: Record<string, number>;
