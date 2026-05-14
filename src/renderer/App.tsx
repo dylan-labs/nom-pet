@@ -69,7 +69,7 @@ function formatReportFallback(r: DailyReport): string {
 }
 
 export function App() {
-  const [bubble, setBubble] = useState<{ header: string; body: string; gold?: boolean } | null>(null);
+  const [bubble, setBubble] = useState<{ header: string; body: string; gold?: boolean; onClick?: () => void } | null>(null);
   const [today, setToday] = useState(0);
   const [, setCumulative] = useState(0);
   const [petState, setPetState] = useState<PetState>('idle');
@@ -89,8 +89,8 @@ export function App() {
     setPetState(next);
   }
 
-  function showBubble(header: string, body: string, ms = 3000, opts?: { gold?: boolean }) {
-    setBubble({ header, body, gold: opts?.gold });
+  function showBubble(header: string, body: string, ms = 3000, opts?: { gold?: boolean; onClick?: () => void }) {
+    setBubble({ header, body, gold: opts?.gold, onClick: opts?.onClick });
     if (bubbleTimerRef.current) clearTimeout(bubbleTimerRef.current);
     bubbleTimerRef.current = setTimeout(() => setBubble(null), ms);
   }
@@ -320,6 +320,20 @@ export function App() {
     });
   }, []);
 
+  // Journal landed on disk — pop a clickable bubble so the user knows
+  // it exists. Without this, the file just appears silently and most
+  // users would never discover the feature.
+  useEffect(() => {
+    return window.nom.journal.onCreated(() => {
+      showBubble(
+        '日记本',
+        '昨天的日记写完了，点我看看？',
+        4500,
+        { onClick: () => window.nom.journal.open() },
+      );
+    });
+  }, []);
+
   useEffect(() => {
     return window.nom.onSession((e) => {
       if (e.kind !== 'start') return;
@@ -403,6 +417,7 @@ export function App() {
     };
   }, []);
 
+
   const lastDateRef = useRef(new Date().toDateString());
   useEffect(() => {
     const id = setInterval(() => {
@@ -422,7 +437,11 @@ export function App() {
   return (
     <div className="container">
       {bubble && (
-        <div className={`bubble${bubble.gold ? ' bubble--gold' : ''}`}>
+        <div
+          className={`bubble${bubble.gold ? ' bubble--gold' : ''}${bubble.onClick ? ' bubble--clickable' : ''}`}
+          onClick={bubble.onClick}
+          role={bubble.onClick ? 'button' : undefined}
+        >
           <div className="bubble-header">{bubble.header}</div>
           <div className="bubble-body">{bubble.body}</div>
         </div>

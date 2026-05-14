@@ -1,0 +1,37 @@
+/* Layout is fully inline in App.tsx (mirrors GameBoyCard.tsx), so this
+   file only owns the bits that have to be global: reset, the matte-black
+   window backdrop, custom scrollbar inside the LCD, and a tasteful glow
+   on the red LED. */
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #0a0a0a;
+  font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+               'Helvetica Neue', sans-serif;
+  color: #0f380f;
+  user-select: none;
+  overflow: hidden;
+}
+
+#journal-root {
+  width: 100%;
+  height: 100%;
+}
+
+/* Thin GB-green scrollbar inside the LCD so it doesn't break the
+   illusion with a system-default chrome strip. */
+*::-webkit-scrollbar {
+  width: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: #306230;
+  border-radius: 3px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #0f380f;
+}

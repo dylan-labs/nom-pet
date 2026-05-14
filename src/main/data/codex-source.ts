@@ -53,6 +53,11 @@ export class CodexSource extends EventEmitter {
       return;
     }
 
+    // Reset on each start — see ClaudeSource for why. Without this, a
+    // stop()/start() cycle replays "session started" for every existing
+    // JSONL on the next initial scan.
+    this.ready = false;
+
     this.watcher = chokidar.watch(this.rootDir, {
       persistent: true,
       ignoreInitial: false,
@@ -63,9 +68,12 @@ export class CodexSource extends EventEmitter {
 
     this.watcher.on('add', (file) => {
       if (!file.endsWith('.jsonl')) return;
-      fs.promises.stat(file)
-        .then((stat) => this.offsets.set(file, stat.size))
-        .catch(() => {/* gone before we could stat — ignore */});
+      // Sync stat closes a `change` event vs offset-init race — see
+      // ClaudeSource for why.
+      try {
+        const stat = fs.statSync(file);
+        this.offsets.set(file, stat.size);
+      } catch { /* gone before we could stat — ignore */ }
       if (this.ready) {
         this.emit('session', {
           source: this.id,

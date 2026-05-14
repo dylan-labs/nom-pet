@@ -60,6 +60,14 @@ export class ClaudeSource extends EventEmitter {
       return;
     }
 
+    // Reset `ready` for each start. Without this, a stop()/start() cycle
+    // (e.g. user toggled the data source off then on) leaves `ready=true`
+    // from the previous lifecycle — and the initial-scan `add` events
+    // would each emit a `session` start, popping a bubble per historical
+    // JSONL. That's why toggling sources used to make the pet shout in a
+    // burst.
+    this.ready = false;
+
     this.watcher = chokidar.watch(this.rootDir, {
       persistent: true,
       ignoreInitial: false,
@@ -68,14 +76,20 @@ export class ClaudeSource extends EventEmitter {
 
     this.watcher.on('add', (file) => {
       if (!file.endsWith('.jsonl')) return;
-      // For files that exist when we start, jump past their current size so
-      // we only count tokens written from now on. For brand-new files (size 0)
-      // this is also correct.
-      fs.promises.stat(file)
-        .then((stat) => this.offsets.set(file, stat.size))
-        .catch(() => {/* gone before we could stat — ignore */});
-      // Files appearing AFTER chokidar's initial scan = a fresh Claude Code
-      // session just opened. The renderer reacts (wake + greet bubble).
+      // For files that exist when we start, jump past their current size
+      // so we only count tokens written from now on. Sync stat closes a
+      // race where a `change` event lands before an async-stat promise
+      // resolves — the change handler would otherwise read from offset
+      // 0 and replay the whole file's history. statSync is microseconds
+      // for one inode, totally fine to block on.
+      try {
+        const stat = fs.statSync(file);
+        this.offsets.set(file, stat.size);
+      } catch { /* gone before we could stat — ignore */ }
+      // Files appearing AFTER chokidar's initial scan = a fresh Claude
+      // Code session just opened. The renderer reacts (wake + greet
+      // bubble). During the initial scan, `ready` is false so historical
+      // files don't get fake "session started" events.
       if (this.ready) {
         this.emit('session', {
           source: 'claude-code',

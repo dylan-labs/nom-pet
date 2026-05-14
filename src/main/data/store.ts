@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import type { DailyReport, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SoulKernel, SoulPreset, StateSnapshot, Weekday, WeeklyDayBucket, WeeklyReport } from '../../shared/types';
+import type { DailyReport, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SoulKernel, SoulPreset, SourceId, StateSnapshot, Weekday, WeeklyDayBucket, WeeklyReport } from '../../shared/types';
 import { computeLevel, levelBadgeAt } from './levels';
 import { computeSeal, verifySeal } from './seal';
 
@@ -12,7 +12,7 @@ export interface WindowPosition {
   displayId?: number;
 }
 
-const SCHEMA_VERSION = 4; // v4 (0.0.23): added settings.onboarded + settings.soulKernel for the Soul Kernel feature.
+const SCHEMA_VERSION = 5; // v5 (0.0.24): per-source today bucket so the "today" counter filters when a source is toggled off.
 
 export interface NomState {
   schemaVersion: number;
@@ -20,6 +20,15 @@ export interface NomState {
   tokens: {
     cumulative: number;
     daily: Record<string, number>;
+    /**
+     * Today's token intake broken down by source. Lets the live "today"
+     * counter filter against the user's current enabled-sources setting
+     * — turning Claude Code off should drop the visible number to just
+     * Codex, not leave a stale total. Resets when the date rolls over.
+     * `todayBucketDate` records which date the bucket is valid for.
+     */
+    todayBySource: Partial<Record<SourceId, number>>;
+    todayBucketDate: string;
   };
   /**
    * Last level index already shown to the user. Lets us detect level-ups
@@ -57,6 +66,18 @@ const VALID_SOUL_PRESETS: SoulPreset[] = [
   'cursed-doll', 'aloof-otaku', 'philosopher-stray', 'custom',
 ];
 
+const VALID_SOURCES: SourceId[] = ['claude-code', 'codex'];
+
+function sanitizeTodayBySource(raw: unknown): Partial<Record<SourceId, number>> {
+  if (!raw || typeof raw !== 'object') return {};
+  const out: Partial<Record<SourceId, number>> = {};
+  for (const k of VALID_SOURCES) {
+    const v = (raw as Record<string, unknown>)[k];
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) out[k] = v;
+  }
+  return out;
+}
+
 function parseSoulKernel(raw: unknown): SoulKernel | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as { preset?: unknown; text?: unknown };
@@ -68,7 +89,7 @@ function parseSoulKernel(raw: unknown): SoulKernel | null {
 const DEFAULT_STATE: NomState = {
   schemaVersion: SCHEMA_VERSION,
   windowPosition: null,
-  tokens: { cumulative: 0, daily: {} },
+  tokens: { cumulative: 0, daily: {}, todayBySource: {}, todayBucketDate: todayKey() },
   lastLevelIndex: -1,
   lastDailyReportShownOn: null,
   startedAt: 0,
@@ -175,12 +196,27 @@ export class Store {
           console.log('[nom] migrating state v2 → v3 (cumulative preserved, future writes sealed)');
           this.scheduleWrite();
         }
+        // Per-source today bucket — only valid for the date in
+        // todayBucketDate. If we loaded a state from yesterday, the
+        // bucket is stale and gets reset so toggling sources today
+        // doesn't show last night's leftovers.
+        const today = todayKey();
+        const persistedBucketDate = typeof parsed.tokens?.todayBucketDate === 'string'
+          ? parsed.tokens.todayBucketDate
+          : null;
+        const todayBySource: Partial<Record<SourceId, number>> =
+          persistedBucketDate === today && parsed.tokens?.todayBySource && typeof parsed.tokens.todayBySource === 'object'
+            ? sanitizeTodayBySource(parsed.tokens.todayBySource)
+            : {};
+
         this.state = {
           schemaVersion: SCHEMA_VERSION,
           windowPosition: parsed.windowPosition ?? null,
           tokens: {
             cumulative: claimed.cumulative,
             daily: typeof parsed.tokens?.daily === 'object' && parsed.tokens.daily ? parsed.tokens.daily : {},
+            todayBySource,
+            todayBucketDate: today,
           },
           lastLevelIndex: claimed.lastLevelIndex,
           lastDailyReportShownOn: typeof parsed.lastDailyReportShownOn === 'string'
@@ -232,8 +268,31 @@ export class Store {
   snapshot(): StateSnapshot {
     return {
       cumulative: this.state.tokens.cumulative,
-      today: this.state.tokens.daily[todayKey()] ?? 0,
+      today: this.filteredTodayTotal(),
     };
+  }
+
+  /**
+   * Sum today's per-source intake filtered against the user's currently
+   * enabled sources. Falls back to the daily map's total when the
+   * per-source bucket is empty (e.g. mid-day on fresh install before
+   * any live event has landed) — that way the counter never reads zero
+   * just because we haven't seen a `tokens` event yet.
+   */
+  private filteredTodayTotal(): number {
+    const bucket = this.state.tokens.todayBySource;
+    const enabled = this.state.settings.sources;
+    let sum = 0;
+    if (enabled.claudeCode) sum += bucket['claude-code'] ?? 0;
+    if (enabled.codex)      sum += bucket['codex']       ?? 0;
+    // If both sources are enabled and the bucket is empty, prefer the
+    // daily map (covers the moment between launch and the first live
+    // event — the 7-day scan has already seeded daily but not the
+    // per-source bucket).
+    if (sum === 0 && enabled.claudeCode && enabled.codex) {
+      return this.state.tokens.daily[todayKey()] ?? 0;
+    }
+    return sum;
   }
 
   getWindowPosition(): WindowPosition | null {
@@ -241,11 +300,15 @@ export class Store {
   }
 
   /**
-   * Apply a token delta. Returns the post-update snapshot AND a level-up
-   * event if the cumulative crossed one or more level thresholds.
-   * Caller (main/index.ts) fans the level-up event out to the renderer.
+   * Apply a token delta from one source. Returns the post-update snapshot
+   * AND a level-up event if the cumulative crossed one or more level
+   * thresholds. Caller (main/index.ts) fans the level-up event out to
+   * the renderer.
+   *
+   * `source` lets us bucket today's intake per source so the UI can
+   * filter the visible count against the user's enabled-source set.
    */
-  addTokens(delta: number): { snapshot: StateSnapshot; levelUp: LevelUpEvent | null } {
+  addTokens(delta: number, source: SourceId): { snapshot: StateSnapshot; levelUp: LevelUpEvent | null } {
     let levelUp: LevelUpEvent | null = null;
     if (delta > 0) {
       // Lazy seed: if we've never recorded a level (fresh upgrade from a
@@ -260,6 +323,16 @@ export class Store {
       const key = todayKey();
       this.state.tokens.cumulative += delta;
       this.state.tokens.daily[key] = (this.state.tokens.daily[key] ?? 0) + delta;
+
+      // Roll the per-source today bucket if the date changed mid-run
+      // (long-running session crossed midnight). Otherwise accumulate
+      // into the current source's slot.
+      if (this.state.tokens.todayBucketDate !== key) {
+        this.state.tokens.todayBySource = {};
+        this.state.tokens.todayBucketDate = key;
+      }
+      this.state.tokens.todayBySource[source] =
+        (this.state.tokens.todayBySource[source] ?? 0) + delta;
 
       const after = computeLevel(this.state.tokens.cumulative);
       if (after.index > before) {
@@ -277,6 +350,56 @@ export class Store {
       this.scheduleWrite();
     }
     return { snapshot: this.snapshot(), levelUp };
+  }
+
+  /**
+   * Close the gap left by a stop()/use/start() cycle on a data source.
+   * When the user toggles a source off, uses the tool, and toggles back
+   * on, the chokidar watcher sets its offset to the current file size
+   * and ignores the in-between events. Calling this with the scanned
+   * "today total for this source" pulls those missed tokens back into
+   * the per-source bucket AND into cumulative / daily so the user's
+   * level isn't shorted either. Math.max — never decreases anything.
+   *
+   * Returns the delta added to cumulative so the caller can log /
+   * decide whether to push a state-reconciled event.
+   */
+  backfillSourceToday(source: SourceId, scannedAmount: number): { bumpedCumulative: number } {
+    if (scannedAmount <= 0) return { bumpedCumulative: 0 };
+    const key = todayKey();
+    if (this.state.tokens.todayBucketDate !== key) {
+      this.state.tokens.todayBySource = {};
+      this.state.tokens.todayBucketDate = key;
+    }
+    const current = this.state.tokens.todayBySource[source] ?? 0;
+    if (scannedAmount <= current) return { bumpedCumulative: 0 };
+    const bump = scannedAmount - current;
+    this.state.tokens.todayBySource[source] = scannedAmount;
+    this.state.tokens.cumulative += bump;
+    this.state.tokens.daily[key] = (this.state.tokens.daily[key] ?? 0) + bump;
+    // Silently sync lastLevelIndex to the new cumulative — this is
+    // recovery, not progress, so no level-up event fires.
+    this.state.lastLevelIndex = computeLevel(this.state.tokens.cumulative).index;
+    this.scheduleWrite();
+    return { bumpedCumulative: bump };
+  }
+
+  /**
+   * Seed today's per-source bucket from a startup scan. Uses Math.max
+   * (mirrors setDayBaseline) so concurrent live events that beat the
+   * scan to the punch aren't clobbered. Resets the bucket if the
+   * persisted date is stale.
+   */
+  setTodayBaselineForSource(source: SourceId, amount: number): void {
+    if (amount <= 0) return;
+    const key = todayKey();
+    if (this.state.tokens.todayBucketDate !== key) {
+      this.state.tokens.todayBySource = {};
+      this.state.tokens.todayBucketDate = key;
+    }
+    const current = this.state.tokens.todayBySource[source] ?? 0;
+    this.state.tokens.todayBySource[source] = Math.max(current, amount);
+    this.scheduleWrite();
   }
 
   getLevel(): LevelInfo {

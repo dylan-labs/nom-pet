@@ -195,3 +195,14 @@ html, body {
   color: #92400e;
 }
 
+.bubble--clickable {
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: transform 80ms ease, box-shadow 80ms ease;
+}
+
+.bubble--clickable:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+}
+

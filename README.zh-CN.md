@@ -95,7 +95,8 @@ nom 在隐私上是偏执的：
 
 1. **默认零网络请求**。基础体验完全离线 —— 全部从你本机的 Claude Code 文件读。唯一可能联网的是上面那个可选的 AI 台词功能，**只有你主动开启并配置 endpoint 才会发请求**。
 2. **从不读取或发送 prompt/response 内容**。nom 只解析 JSONL 里的 `usage.{input,output,cache_*}_tokens` 数字。开 AI 台词后，发给 LLM 端点的也只有元数据（触发类型、时间、数字），**绝不**包含对话本身。
-3. **所有状态本地**。`~/.nom/state.json` 是人可读 JSON，删掉就完全重置。
+3. **启动时会回看历史 JSONL**。打开 nom 时会做两轮扫描：一遍最近 7 天（毫秒级，让"昨日小结"和今日计数立即有数据），一遍全量（后台跑，用来自愈丢失的等级和累计）。两轮**都只读 `usage.*_tokens` 数字**，不读 prompt 内容，不写回 Claude / Codex 的目录。扫描结果只存在 `~/.nom/state.json`，不发任何地方。
+4. **所有状态本地**。`~/.nom/state.json` 是人可读 JSON，删掉就完全重置。
 
 ## Star History
 

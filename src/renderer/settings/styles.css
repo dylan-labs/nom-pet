@@ -477,6 +477,32 @@ html, body, #settings-root {
   line-height: 1.6;
 }
 
+/* In-card explanatory note — used to disclose behaviours users wouldn't
+   guess from a toggle label alone (e.g. that nom re-reads transcript
+   history at startup). Left-aligned, smaller than body, slightly muted. */
+.card-note {
+  margin-top: 10px;
+  padding: 10px 12px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text-subtle);
+  background: var(--tag-bg);
+  border-radius: 6px;
+}
+
+.card-note strong {
+  color: var(--text-body);
+  font-weight: 600;
+}
+
+.card-note code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--tag-bg-strong, rgba(0, 0, 0, 0.06));
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10.5px;
+}
+
 .hint code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   background: var(--tag-bg);

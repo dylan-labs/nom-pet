@@ -8,7 +8,8 @@ import { scanRecentHistory, scanLifetimeHistory } from './data/today-scan';
 import { scanCodexRecentHistory, scanCodexLifetimeHistory } from './data/codex-today-scan';
 import { loadUserPet, listInstalledPets } from './data/pet-loader';
 import { generateLine, testLlm } from './data/llm';
-import type { DailyReport, DialogueContext, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SessionEvent, SoulKernel, SoulPreset, SourceId, StateReconciledEvent, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
+import { generateJournalForYesterday, listJournalDates, readJournal, regenerateJournal } from './data/journal';
+import type { DailyReport, DialogueContext, JournalCreatedEvent, JournalEntry, LevelInfo, LevelUpEvent, LlmSettings, NomSettings, SessionEvent, SoulKernel, SoulPreset, SourceId, StateReconciledEvent, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
 import { presetText } from './data/soul';
 
 const WIN_SIZE = 200;
@@ -19,6 +20,7 @@ let petWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
 let cardWindow: BrowserWindow | null = null;
 let onboardingWindow: BrowserWindow | null = null;
+let journalWindow: BrowserWindow | null = null;
 // Staged for the card renderer to pull via IPC once the window opens. Lives
 // here (not in Store) because it's an in-flight UI payload, not persistent state.
 let pendingCardPayload: WeeklyCardPayload | null = null;
@@ -53,6 +55,46 @@ function reconcileSources(): void {
  * renderer will pick the new values up via its mount-time `getState()` /
  * `getLevel()` queries (e.g. after onboarding completes).
  */
+/**
+ * Close the off-window gap when the user re-enables a source. While the
+ * watcher was stopped, any tokens the user actually consumed are sitting
+ * in the JSONL on disk but were never emitted as live events; the
+ * watcher's restart then sets its offsets past those events. We re-scan
+ * today's transcripts for that source and push the missed delta into
+ * `todayBySource` + cumulative + daily. Math.max inside the store
+ * guarantees idempotence and never shrinks anything.
+ */
+async function backfillSourceAfterEnable(uiKey: 'claudeCode' | 'codex'): Promise<void> {
+  try {
+    const todayK = (() => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    })();
+    const source: SourceId = uiKey === 'claudeCode' ? 'claude-code' : 'codex';
+    const scan = uiKey === 'claudeCode'
+      ? await scanRecentHistory(1)
+      : await scanCodexRecentHistory(1);
+    const amount = scan.perDay[todayK] ?? 0;
+    if (amount <= 0) return;
+    const { bumpedCumulative } = store.backfillSourceToday(source, amount);
+    if (bumpedCumulative > 0) {
+      console.log(
+        `[nom] re-enable backfill for ${source}: caught up ${bumpedCumulative} ` +
+        `tokens missed while watcher was off`
+      );
+      if (petWindow && !petWindow.isDestroyed()) {
+        petWindow.webContents.send('nom:state:reconciled', {
+          snapshot: store.snapshot(),
+          level: store.getLevel(),
+          reason: 'source-toggle',
+        } satisfies StateReconciledEvent);
+      }
+    }
+  } catch (err) {
+    console.error('[nom] re-enable backfill failed:', err);
+  }
+}
+
 async function runLifetimeReconcile(): Promise<void> {
   try {
     const [claude, codex] = await Promise.all([
@@ -70,6 +112,15 @@ async function runLifetimeReconcile(): Promise<void> {
       const combined = (claude.perDay[day] ?? 0) + (codex.perDay[day] ?? 0);
       store.setDayBaseline(day, combined);
     }
+    // Mirror the recent-scan path: also seed today's per-source bucket
+    // so the source-filter view shows the correct subtotal even on
+    // first launch with no live events yet.
+    const todayK = (() => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    })();
+    if (claude.perDay[todayK]) store.setTodayBaselineForSource('claude-code', claude.perDay[todayK]);
+    if (codex.perDay[todayK])  store.setTodayBaselineForSource('codex',       codex.perDay[todayK]);
     const lifetimeTotal = claude.total + codex.total;
     const { changed, snapshot, level } = store.reconcileCumulativeFloor(lifetimeTotal);
     if (changed) {
@@ -204,9 +255,11 @@ function createPetWindow() {
     const weekly = store.computeWeeklyReport();
     const canExportCard = weekly.thisWeekTokens > 0;
 
-    const petSubmenu: Electron.MenuItemConstructorOptions[] = installed.length === 0
-      ? [{ label: '（未安装宠物）', enabled: false }]
-      : installed.map((p) => ({
+    // "切换宠物" submenu — only worth showing when the user has more
+    // than one pet installed; otherwise it's a 1-radio noop that clutters
+    // the menu. Settings still exposes the picker for edge cases.
+    const petSubmenu: Electron.MenuItemConstructorOptions[] = installed.length > 1
+      ? installed.map((p) => ({
           label: p.displayName,
           type: 'radio' as const,
           checked: (settings.activePetSlug ?? installed[0]!.slug) === p.slug,
@@ -214,69 +267,42 @@ function createPetWindow() {
             store.setActivePetSlug(p.slug);
             petWindow?.webContents.send('nom:pet:changed');
           },
-        }));
+        }))
+      : [];
 
-    const menu = Menu.buildFromTemplate([
+    // Build top-level items. Toggles (游走 / AI 台词 / 数据源) used to
+    // live here too — they're now Settings-only because the right-click
+    // menu reads better as "destinations" than as a kitchen-sink panel.
+    const items: Electron.MenuItemConstructorOptions[] = [
       {
-        label: '允许游走',
-        type: 'checkbox',
-        checked: settings.wanderEnabled,
-        click: (item) => {
-          const next = store.setWanderEnabled(item.checked);
-          petWindow?.webContents.send('nom:settings:changed', next);
-        },
+        label: '📓  翻日记本',
+        click: () => openJournalWindow(),
       },
       {
-        label: 'AI 台词',
-        type: 'checkbox',
-        checked: !!settings.llm?.enabled,
-        click: (item) => {
-          const next = store.setLlmEnabled(item.checked);
-          petWindow?.webContents.send('nom:settings:changed', next);
-        },
-      },
-      {
-        label: '数据源',
+        label: '🃏  导出战绩',
+        enabled: canExportCard,
         submenu: [
           {
-            label: 'Claude Code',
-            type: 'checkbox',
-            checked: settings.sources.claudeCode,
-            click: (item) => {
-              const next = store.setSourceEnabled('claudeCode', item.checked);
-              reconcileSources();
-              petWindow?.webContents.send('nom:settings:changed', next);
-            },
+            label: 'Game Boy 风',
+            click: () => { void exportWeeklyCard('gameboy'); },
           },
           {
-            label: 'Codex',
-            type: 'checkbox',
-            checked: settings.sources.codex,
-            click: (item) => {
-              const next = store.setSourceEnabled('codex', item.checked);
-              reconcileSources();
-              petWindow?.webContents.send('nom:settings:changed', next);
-            },
+            label: '极客风 · Hacker Mode',
+            click: () => { void exportWeeklyCard('terminal'); },
           },
         ],
       },
-      { label: '选择宠物', submenu: petSubmenu },
+    ];
+    if (petSubmenu.length > 0) {
+      items.push({ label: '🐾  切换宠物', submenu: petSubmenu });
+    }
+    items.push(
       { type: 'separator' },
-      {
-        label: canExportCard ? '导出本周战绩' : '导出本周战绩（本周还没吃 token）',
-        enabled: canExportCard,
-        click: () => { void exportWeeklyCard('gameboy'); },
-      },
-      {
-        label: '导出本周战绩 (Hacker Mode)',
-        enabled: canExportCard,
-        click: () => { void exportWeeklyCard('terminal'); },
-      },
-      { type: 'separator' },
-      { label: '设置…', accelerator: 'CmdOrCtrl+,', click: () => openSettingsWindow() },
-      { label: '关闭宠物', click: () => app.quit() },
-    ]);
-    menu.popup({ window: petWindow });
+      { label: '⚙️  设置', accelerator: 'CmdOrCtrl+,', click: () => openSettingsWindow() },
+      { label: '👋  让它休息', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
+    );
+
+    Menu.buildFromTemplate(items).popup({ window: petWindow });
   });
 
   if (process.env['ELECTRON_RENDERER_URL']) {
@@ -362,6 +388,50 @@ async function exportWeeklyCard(style: WeeklyCardStyle): Promise<WeeklyCardExpor
     pendingCardPayload = null;
     if (cardWindow && !cardWindow.isDestroyed()) cardWindow.destroy();
     cardWindow = null;
+  }
+}
+
+/**
+ * Open the Game Boy-styled journal viewer. Singleton — clicking the
+ * menu item again brings the existing window forward instead of opening
+ * a second copy.
+ */
+function openJournalWindow(): void {
+  if (journalWindow && !journalWindow.isDestroyed()) {
+    journalWindow.show();
+    journalWindow.focus();
+    return;
+  }
+
+  journalWindow = new BrowserWindow({
+    width: 420,
+    height: 600,
+    title: 'nom · 日记本',
+    // Frameless + matte-black bg so the renderer fully owns the look —
+    // shell, screen, D-pad and A/B all drawn inside, matching the weekly
+    // card's Game Boy device illustration. macOS traffic lights would
+    // clash with the LCD aesthetic, hence frame: false.
+    frame: false,
+    backgroundColor: '#0a0a0a',
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  journalWindow.once('ready-to-show', () => journalWindow?.show());
+  journalWindow.on('closed', () => { journalWindow = null; });
+
+  if (process.env['ELECTRON_RENDERER_URL']) {
+    journalWindow.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/journal.html`);
+  } else {
+    journalWindow.loadFile(path.join(__dirname, '../renderer/journal.html'));
   }
 }
 
@@ -474,6 +544,16 @@ async function main() {
       store.setDayBaseline(day, combined);
       totalSeeded += combined;
     }
+    // ALSO seed today's per-source bucket so toggling sources mid-day
+    // immediately drops the "today" counter to the correct subtotal
+    // — without this, the filter would read 0 for a source we haven't
+    // received a live event from yet this session.
+    const todayK = (() => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    })();
+    if (claude.perDay[todayK]) store.setTodayBaselineForSource('claude-code', claude.perDay[todayK]);
+    if (codex.perDay[todayK])  store.setTodayBaselineForSource('codex',       codex.perDay[todayK]);
     console.log(
       `[nom] history scan seeded ${allDays.size} days, total ${totalSeeded} tokens ` +
       `(claude=${claude.filesScanned}f, codex=${codex.filesScanned}f)`
@@ -508,6 +588,21 @@ async function main() {
     const next = store.setSourceEnabled(args.source, args.enabled);
     reconcileSources();
     petWindow?.webContents.send('nom:settings:changed', next);
+    // Toggling a source changes which buckets the "today" counter sums,
+    // so push a fresh snapshot. The renderer's onStateReconciled handler
+    // updates the visible number silently (no bubble).
+    petWindow?.webContents.send('nom:state:reconciled', {
+      snapshot: store.snapshot(),
+      level: store.getLevel(),
+      reason: 'source-toggle',
+    } satisfies StateReconciledEvent);
+    // When the source comes back ON, fire a fire-and-forget scan of
+    // TODAY's transcripts for that source — closes the gap left by any
+    // tool usage that happened while the watcher was stopped. Pushes a
+    // second reconciled event if the scan actually bumped anything.
+    if (args.enabled) {
+      void backfillSourceAfterEnable(args.source);
+    }
     return next;
   });
   ipcMain.handle('nom:settings:setName', (_, name: string): NomSettings => {
@@ -574,6 +669,15 @@ async function main() {
   });
   ipcMain.handle('nom:card:getPayload', (): WeeklyCardPayload | null => pendingCardPayload);
 
+  // ── Journal ──────────────────────────────────────────────────────────
+  ipcMain.handle('nom:journal:list', (): Promise<string[]> => listJournalDates());
+  ipcMain.handle('nom:journal:get', (_, dateKey: string): Promise<JournalEntry | null> => readJournal(dateKey));
+  ipcMain.handle('nom:journal:regenerate', (_, dateKey: string): Promise<JournalEntry | null> => regenerateJournal(store, dateKey));
+  // Renderer-triggered window open — lets the post-generation bubble's
+  // click handler ask main to pop the viewer without re-implementing
+  // window creation IPC for one button.
+  ipcMain.on('nom:journal:open', () => openJournalWindow());
+
   let dragOrigin: { mouseX: number; mouseY: number; winX: number; winY: number } | null = null;
   ipcMain.on('nom:drag:begin', (_, { x, y }: { x: number; y: number }) => {
     if (!petWindow) return;
@@ -618,6 +722,23 @@ async function main() {
     openOnboardingWindow();
   }
 
+  // 5 seconds after the pet window is up, try to write yesterday's
+  // journal. Non-blocking, fully self-contained: bails when there's no
+  // data for yesterday or the file already exists. LLM failures fall
+  // back to the template path so the file always lands. On success, fan
+  // a JournalCreatedEvent out to the pet renderer so it can pop a
+  // "want to read it?" bubble — the visible hook that turns this from
+  // a silent backend cron into something users notice.
+  setTimeout(async () => {
+    const entry = await generateJournalForYesterday(store);
+    if (entry && petWindow && !petWindow.isDestroyed()) {
+      petWindow.webContents.send('nom:journal:created', {
+        dateKey: entry.date,
+        generatedBy: entry.generatedBy,
+      } satisfies JournalCreatedEvent);
+    }
+  }, 5000);
+
   // Global shortcut to summon the pet back to the current screen if it ends
   // up somewhere invisible (different display, full-screen app on top, etc).
   const ok = globalShortcut.register(SUMMON_SHORTCUT, bringToCurrentScreen);
@@ -629,7 +750,7 @@ async function main() {
   // care which source it came from (dialogue stays unified per user
   // request); only the running token counter and animation react.
   function onTokens(event: { delta: number; source: SourceId; timestamp: number }) {
-    const { snapshot, levelUp } = store.addTokens(event.delta);
+    const { snapshot, levelUp } = store.addTokens(event.delta, event.source);
     lastFedAt = event.timestamp;
     petWindow?.webContents.send('nom:tokens', { ...event, snapshot } satisfies TokensEvent);
     if (levelUp) {

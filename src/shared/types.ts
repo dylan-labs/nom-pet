@@ -76,15 +76,17 @@ export interface LevelUpEvent {
 }
 
 /**
- * Pushed after a background reconcile of cumulative/level against the
- * canonical transcript files. This is NOT a level-up — it's recovery from
- * a wiped ~/.nom/state.json — so the renderer should update silently
- * (no bubble, no animation).
+ * Pushed when the renderer should silently re-render its count + level.
+ * Two reasons today:
+ *  - 'lifetime-scan': background scan rebuilt cumulative from transcripts
+ *  - 'source-toggle': user toggled Claude Code / Codex on or off, so the
+ *    "today" total needs to re-filter against the new enabled set
+ * Either way the renderer updates numbers without bubbles or animations.
  */
 export interface StateReconciledEvent {
   snapshot: StateSnapshot;
   level: LevelInfo;
-  reason: 'lifetime-scan';
+  reason: 'lifetime-scan' | 'source-toggle';
 }
 
 export interface SourceSettings {
@@ -209,4 +211,48 @@ export interface WeeklyCardExportResult {
   ok: boolean;
   filePath?: string;
   error?: string;
+}
+
+/**
+ * The numbers we feed the journal generator. Kept qualitative-friendly:
+ * the LLM is told to never recite raw figures, so we also pre-bucket them
+ * in the prompt. Mood is derived from this in the template fallback.
+ */
+export interface JournalDailyMetadata {
+  dateKey: string;             // YYYY-MM-DD
+  weekday: Weekday;
+  yesterdayTokens: number;
+  dayBeforeTokens: number;     // 0 if no data
+  weekAvgTokens: number;       // 0 if no data
+  /** Cumulative-thousand-thresholds crossed yesterday (e.g. 50000, 100000). */
+  milestonesCrossed: number[];
+}
+
+/**
+ * Pushed to the pet window when a fresh journal lands on disk. Renderer
+ * uses this to show a 3s "昨天的日记写完了" bubble — the gentle nudge
+ * that turns the otherwise-silent background write into a visible
+ * artifact the user might actually open.
+ */
+export interface JournalCreatedEvent {
+  dateKey: string;             // YYYY-MM-DD that was just written
+  generatedBy: 'llm' | 'template';
+}
+
+/**
+ * Frontmatter + body of one journal day. Persisted as Markdown but kept
+ * structured in-memory for the viewer / IPC layer. `body` does NOT
+ * include the frontmatter delimiters.
+ */
+export interface JournalEntry {
+  date: string;                // YYYY-MM-DD
+  weekday: Weekday;
+  weather: string;             // single emoji, e.g. '☔'
+  body: string;                // already trimmed prose, 80-200 chars
+  generatedBy: 'llm' | 'template';
+  petName: string;
+  soulKernelPreset: SoulPreset | null;
+  generatedAt: string;         // ISO-8601
+  /** Raw metadata that fed the generator. Useful for re-generation + debugging. */
+  metadata: JournalDailyMetadata;
 }

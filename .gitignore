@@ -8,3 +8,4 @@ dist/
 .env.local
 *.tgz
 .claude/
+scripts/*.bundle.mjs

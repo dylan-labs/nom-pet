@@ -1,7 +1,13 @@
-import type { DialogueContext, LlmSettings, SoulKernel } from '../../shared/types';
+import type { DialogueContext, JournalDailyMetadata, LlmSettings, SoulKernel } from '../../shared/types';
 import { composeSystemPrompt } from './soul';
 
 const REQUEST_TIMEOUT_MS = 20000;
+// Journals are longer (80-200 char prose) and thinking models may need
+// more headroom to land in that band; bump both the timeout and budget.
+const JOURNAL_TIMEOUT_MS = 45000;
+const JOURNAL_MAX_TOKENS = 1536;
+const JOURNAL_MIN_CHARS = 60;   // below this we treat as "model gave up" and fall back
+const JOURNAL_MAX_CHARS = 260;  // hard cap on rendered prose
 // Thinking-model servers often ignore enable_thinking/reasoning_effort and
 // still emit a <think> block. Budget enough room to finish reasoning AND
 // produce a real reply; cleanLine strips the trace before display.
@@ -127,6 +133,42 @@ function pickContent(
   if (typeof msg.content === 'string' && msg.content.trim()) return msg.content;
   if (typeof msg.reasoning_content === 'string' && msg.reasoning_content.trim()) return msg.reasoning_content;
   return null;
+}
+
+// Consume optional U+FE0F variation selector + any whitespace after the
+// emoji — many models emit "☀️\n\n" with the VS that isn't \s-matched,
+// which would otherwise leave an orphan codepoint at the start of body.
+const WEATHER_EMOJI_RE = /^([☀☁☔❄🌤🌧🌫🌪🌈⛈])[️\s]*/u;
+
+/**
+ * Clean a journal-mode response: strip thinking traces, peel off a
+ * weather emoji if the model put one at the start, collapse whitespace,
+ * and enforce the character ceiling. Returns null if the cleaned body is
+ * too short to be a usable journal (model gave up / emitted noise).
+ */
+function cleanJournal(raw: string): { body: string; weather: string | null } | null {
+  let s = raw;
+  const thinkClose = s.lastIndexOf('</think>');
+  if (thinkClose >= 0) s = s.slice(thinkClose + '</think>'.length);
+  s = s.trim();
+  // Models sometimes wrap the whole thing in a quote / corner brackets.
+  s = s.replace(/^[「『""''`"']\s*/, '').replace(/\s*[」』""''`"']$/, '');
+  // Normalise whitespace: collapse runs of whitespace inside a paragraph
+  // to single spaces, but keep paragraph breaks as a single newline.
+  s = s.replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim();
+
+  // Pull off a leading weather emoji if present, so the writer can store
+  // it in the frontmatter rather than have it floating in the body.
+  let weather: string | null = null;
+  const m = s.match(WEATHER_EMOJI_RE);
+  if (m) {
+    weather = m[1]!;
+    s = s.slice(m[0].length).trimStart();
+  }
+
+  if (s.length < JOURNAL_MIN_CHARS) return null;
+  if (s.length > JOURNAL_MAX_CHARS) s = s.slice(0, JOURNAL_MAX_CHARS - 1).trimEnd() + '…';
+  return { body: s, weather };
 }
 
 /** Strip reasoning-model thinking traces and any wrapping noise. */
@@ -276,6 +318,117 @@ export async function testLlm(
       return { ok: false, error: `内容清洗后为空。原始响应片段：${raw.slice(0, 80)}` };
     }
     return { ok: true, sample: cleaned };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Format a token count in the journal user prompt without leaking the
+ * raw figure into the model's vocabulary. The model is told elsewhere
+ * not to recite numbers, but we still pre-bucket so it gets the vibe.
+ */
+function describeJournalTokens(n: number): string {
+  if (n === 0)        return '一整天颗粒无收';
+  if (n < 500)        return '才一小口，几乎等于没吃';
+  if (n < 5_000)      return '吃了正经一顿';
+  if (n < 50_000)     return '吃得挺饱';
+  if (n < 500_000)    return '吃撑了';
+  return '吃成猪，撑到爆炸';
+}
+
+function describeJournalCompare(y: number, dayBefore: number): string {
+  if (dayBefore === 0) return '前天没数据，没法比';
+  const pct = (y - dayBefore) / dayBefore;
+  if (pct > 0.5)  return '比前天多一大截';
+  if (pct > 0.1)  return '比前天稍多';
+  if (pct < -0.5) return '比前天少了大半';
+  if (pct < -0.1) return '比前天少一些';
+  return '和前天差不多';
+}
+
+function describeWeekAvg(y: number, avg: number): string {
+  if (avg === 0) return '周均没有参考';
+  const ratio = y / avg;
+  if (ratio > 1.5) return '远超周均';
+  if (ratio > 1.1) return '略高于周均';
+  if (ratio < 0.5) return '远低于周均';
+  if (ratio < 0.9) return '略低于周均';
+  return '和周均差不多';
+}
+
+function describeMilestones(ms: number[]): string {
+  if (ms.length === 0) return '没有跨过新的里程碑';
+  const fmt = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(0)}M` :
+    n >= 1e3 ? `${(n / 1e3).toFixed(0)}K` : String(n);
+  return `跨过了 ${ms.map(fmt).join(' / ')} 这些里程碑`;
+}
+
+/**
+ * Generate one day's journal body via the configured LLM. Returns
+ * `null` on any failure (auth, timeout, empty content, too-short
+ * result) — the caller falls back to `renderTemplateJournal`. The
+ * weather emoji is optional; null means "let the caller pick from the
+ * template palette".
+ */
+export async function generateJournalEntry(
+  settings: LlmSettings,
+  petName: string,
+  kernel: SoulKernel | null,
+  meta: JournalDailyMetadata,
+  dateLabel: string,
+): Promise<{ body: string; weather: string | null } | null> {
+  if (!settings.enabled || !settings.endpoint || !settings.model) return null;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), JOURNAL_TIMEOUT_MS);
+
+  const userPrompt =
+    `请写昨天（${dateLabel}）的日记。
+
+数据（仅作为情绪和事件依据，**不要照搬数字**）：
+- 总共吃了：${describeJournalTokens(meta.yesterdayTokens)}
+- 跟前天比：${describeJournalCompare(meta.yesterdayTokens, meta.dayBeforeTokens)}
+- 跟周均比：${describeWeekAvg(meta.yesterdayTokens, meta.weekAvgTokens)}
+- 里程碑：${describeMilestones(meta.milestonesCrossed)}
+
+请用 ${petName} 的口吻、严格符合人格内核，写一段 80-200 字的散文体日记。开头可以放一个最贴当天氛围的天气 emoji。
+
+/no_think`;
+
+  try {
+    const res = await fetch(settings.endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {}),
+      },
+      body: JSON.stringify({
+        model: settings.model,
+        messages: [
+          { role: 'system', content: composeSystemPrompt(petName, kernel, 'journal') },
+          { role: 'user', content: userPrompt },
+        ],
+        max_tokens: JOURNAL_MAX_TOKENS,
+        temperature: 0.95,
+        ...NO_THINK_FLAGS,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      console.warn('[nom][llm][journal] non-2xx:', res.status);
+      return null;
+    }
+
+    const data = await res.json() as {
+      choices?: Array<{ message?: { content?: string | null; reasoning_content?: string | null } }>;
+    };
+    const raw = pickContent(data.choices?.[0]?.message);
+    if (!raw) return null;
+    return cleanJournal(raw);
+  } catch (err) {
+    console.warn('[nom][llm][journal] error:', (err as Error).message);
+    return null;
   } finally {
     clearTimeout(timer);
   }

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { DailyReport, DialogueContext, InstalledPetInfo, LevelInfo, LevelUpEvent, LlmSettings, LoadedPet, NomSettings, SessionEvent, SoulKernel, SoulPreset, StateReconciledEvent, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
+import type { DailyReport, DialogueContext, InstalledPetInfo, JournalCreatedEvent, JournalEntry, LevelInfo, LevelUpEvent, LlmSettings, LoadedPet, NomSettings, SessionEvent, SoulKernel, SoulPreset, StateReconciledEvent, StateSnapshot, ThinkingEvent, TokensEvent, WeeklyCardExportResult, WeeklyCardPayload, WeeklyCardStyle } from '../shared/types';
 
 const api = {
   version: '0.0.23',
@@ -133,6 +133,28 @@ const api = {
   },
   setPetName(name: string): Promise<NomSettings> {
     return ipcRenderer.invoke('nom:settings:setName', name) as Promise<NomSettings>;
+  },
+  // ── Pet Journal ──────────────────────────────────────────────────────
+  journal: {
+    list(): Promise<string[]> {
+      return ipcRenderer.invoke('nom:journal:list') as Promise<string[]>;
+    },
+    get(dateKey: string): Promise<JournalEntry | null> {
+      return ipcRenderer.invoke('nom:journal:get', dateKey) as Promise<JournalEntry | null>;
+    },
+    regenerate(dateKey: string): Promise<JournalEntry | null> {
+      return ipcRenderer.invoke('nom:journal:regenerate', dateKey) as Promise<JournalEntry | null>;
+    },
+    /** Ask main to open the viewer window (idempotent — focuses if already open). */
+    open(): void {
+      ipcRenderer.send('nom:journal:open');
+    },
+    /** Subscribe to "yesterday's journal was just written" events. */
+    onCreated(callback: (event: JournalCreatedEvent) => void): () => void {
+      const listener = (_: Electron.IpcRendererEvent, event: JournalCreatedEvent) => callback(event);
+      ipcRenderer.on('nom:journal:created', listener);
+      return () => ipcRenderer.removeListener('nom:journal:created', listener);
+    },
   },
 };
 

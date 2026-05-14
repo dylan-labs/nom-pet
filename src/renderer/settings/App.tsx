@@ -188,6 +188,10 @@ export function SettingsApp() {
           <Row label="Codex CLI" sub="监听 ~/.codex/sessions/**/*.jsonl">
             <Toggle checked={settings.sources.codex} onChange={(v) => toggleSource('codex', v)} />
           </Row>
+          <div className="card-note">
+            <strong>启动时会扫一遍历史 JSONL：</strong>近 7 天（毫秒级，让今日计数和昨日小结立刻有数据）+ 全量（后台跑，用来自愈丢失的等级 / 累计）。
+            <strong>只读 <code>usage.*_tokens</code> 数字</strong>，不读 prompt / 回复，不写回任何目录，结果只存在 <code>~/.nom/state.json</code>。
+          </div>
         </section>
 
         {/* Behavior */}

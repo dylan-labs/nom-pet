@@ -95,7 +95,8 @@ nom is paranoid by design:
 
 1. **No network calls by default.** The base experience is fully offline — everything ships from your local Claude Code transcripts. The optional AI dialogue feature is the only thing that can hit the network, and only when you explicitly enable it and configure an endpoint.
 2. **No prompt/response content ever read or sent.** nom only parses `usage.{input,output,cache_*}_tokens` numbers from JSONL. When AI dialogue is on, only metadata (trigger, time, counts) goes to your LLM endpoint — never the actual conversation.
-3. **All state local.** `~/.nom/state.json` is human-readable JSON. Nuke the dir to fully reset.
+3. **Startup re-reads historical JSONL.** Each launch runs two passes: a fast 7-day scan (so "yesterday's recap" and today's counter have data immediately) and a full lifetime scan in the background (used to self-heal if `~/.nom/state.json` was wiped or tampered). Both passes **only read `usage.*_tokens` numbers** — no prompts, no responses, no file paths leave your machine. Results stay in `~/.nom/state.json`.
+4. **All state local.** `~/.nom/state.json` is human-readable JSON. Nuke the dir to fully reset.
 
 ## Star History
 

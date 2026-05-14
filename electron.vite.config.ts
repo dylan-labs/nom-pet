@@ -35,6 +35,7 @@ export default defineConfig({
           settings: 'src/renderer/settings.html',
           card: 'src/renderer/card.html',
           onboarding: 'src/renderer/onboarding.html',
+          journal: 'src/renderer/journal.html',
         },
       },
     },
