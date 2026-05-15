@@ -92,19 +92,32 @@ export async function gatherObservations(store: Store): Promise<Observation[]> {
   }
 
   // ── Late-night activity ────────────────────────────────────────────
+  // Only fire when there's been REAL token activity in the last 30 min
+  // AND it's currently a late hour. Without the recency gate the
+  // observation triggers purely on wall-clock — meaning the pet would
+  // write "主人凌晨还在写" at 5 AM even after the user has been asleep
+  // for 10 hours. Then the LLM cites those fake observations in later
+  // notes and the lie self-propagates. The gate also reframes the
+  // phrasing so we don't claim it's the user typing — Claude Code
+  // background agents / hooks / subagents can produce token events
+  // without the user being at the keyboard.
   const hour = new Date(now).getHours();
-  if (hour < 6) {
-    out.push({
-      kind: 'late-night',
-      significance: 0.7,
-      data: `现在是凌晨 ${hour} 点，主人居然还在写`,
-    });
-  } else if (hour >= 23) {
-    out.push({
-      kind: 'late-night',
-      significance: 0.5,
-      data: `${hour} 点了主人还没睡`,
-    });
+  const recentlyActive = abs.lastActiveAt
+    && (now - Date.parse(abs.lastActiveAt)) <= 30 * 60 * 1000;
+  if (recentlyActive) {
+    if (hour < 6) {
+      out.push({
+        kind: 'late-night',
+        significance: 0.7,
+        data: `凌晨 ${hour} 点，还有 token 在喂过来`,
+      });
+    } else if (hour >= 23) {
+      out.push({
+        kind: 'late-night',
+        significance: 0.5,
+        data: `${hour} 点了，还有活动没停`,
+      });
+    }
   }
 
   // ── Token spike (today vs week avg) ────────────────────────────────

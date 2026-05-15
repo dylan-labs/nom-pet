@@ -72,6 +72,14 @@ export class TickEngine extends EventEmitter {
   private timer: ReturnType<typeof setInterval> | null = null;
   private firstTimer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
+  /**
+   * In-flight onActivity promise — used as a mutex so a burst of token
+   * events (multiple JSONL appends within the same second) doesn't fire
+   * the "homecoming" path multiple times against the same stale
+   * absences.json read. Without serialisation, three concurrent
+   * onActivity calls all see gapHours=14.9 → all append a return note.
+   */
+  private activityChain: Promise<void> = Promise.resolve();
 
   constructor(private store: Store) {
     super();
@@ -112,6 +120,21 @@ export class TickEngine extends EventEmitter {
    * only need the language model to produce the line.
    */
   async onActivity(now: number): Promise<void> {
+    // Chain onto whatever previous onActivity invocation is still in
+    // flight so we read absences.json + write back atomically rather
+    // than letting parallel events race.
+    const prev = this.activityChain;
+    let done!: () => void;
+    this.activityChain = new Promise<void>((res) => { done = res; });
+    try {
+      await prev;
+      await this.runActivityInner(now);
+    } finally {
+      done();
+    }
+  }
+
+  private async runActivityInner(now: number): Promise<void> {
     const { gapHours } = await touchAbsence(now);
     if (gapHours < 1) return; // typical mid-session, no reaction
 
