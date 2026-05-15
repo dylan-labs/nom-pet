@@ -5,7 +5,7 @@ import os from 'node:os';
 import type { JournalDailyMetadata, JournalEntry, NomSettings, SoulPreset, Weekday } from '../../shared/types';
 import { generateJournalEntry } from './llm';
 import { renderTemplateJournal } from './journal-template';
-import { readMood } from './pet-mind';
+import { localIsoString, readMood } from './pet-mind';
 import { Store } from './store';
 
 const DIR = path.join(os.homedir(), '.nom', 'journal');
@@ -169,7 +169,7 @@ export async function readJournal(dateKey: string): Promise<JournalEntry | null>
     generatedBy: generatedBy === 'llm' ? 'llm' : 'template',
     petName: readScalar(fm, 'petName') ?? 'nom',
     soulKernelPreset: preset && preset.length > 0 ? (preset as SoulPreset) : null,
-    generatedAt: readScalar(fm, 'generatedAt') ?? new Date().toISOString(),
+    generatedAt: readScalar(fm, 'generatedAt') ?? localIsoString(),
     metadata: {
       dateKey,
       weekday: weekdayOf(dateKey),
@@ -249,7 +249,7 @@ async function composeEntry(
     generatedBy,
     petName: settings.petName,
     soulKernelPreset: settings.soulKernel?.preset ?? null,
-    generatedAt: new Date().toISOString(),
+    generatedAt: localIsoString(),
     metadata: meta,
   };
 }

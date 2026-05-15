@@ -1,6 +1,6 @@
 import type { Mood, PetMindNote, SoulKernel } from '../../shared/types';
 import { Store } from './store';
-import { readAbsence, readMood, readRecentNotes, readTodayBubbleCount } from './pet-mind';
+import { localIsoString, readAbsence, readMood, readRecentNotes, readTodayBubbleCount } from './pet-mind';
 import { computeLevel } from './levels';
 
 /**
@@ -160,7 +160,7 @@ export async function gatherSituation(store: Store): Promise<SituationSnapshot> 
   }
 
   return {
-    nowIso: date.toISOString(),
+    nowIso: localIsoString(date),
     localHour: date.getHours(),
     weekday: WEEKDAY_CN[date.getDay()]!,
     timeSlot: timeSlot(date.getHours()),

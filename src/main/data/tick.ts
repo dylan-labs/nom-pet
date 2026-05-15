@@ -4,6 +4,7 @@ import { Store, todayKey } from './store';
 import {
   appendNote,
   incrementBubbleCount,
+  localIsoString,
   readAbsence,
   readMood,
   readTodayBubbleCount,
@@ -131,7 +132,7 @@ export class TickEngine extends EventEmitter {
       // This goes in regardless of LLM / autonomy state so the absence
       // history is always accurate.
       await appendNote({
-        ts: new Date(now).toISOString(),
+        ts: localIsoString(now),
         mood: mood.current,
         kind: 'observation',
         text: `主人回来了，离开了 ${gapHours.toFixed(1)} 小时${gapHours >= 24 ? '，这次有点久' : ''}。`,
@@ -204,7 +205,7 @@ export class TickEngine extends EventEmitter {
     // No LLM → tick is mood-drift-only. Quiet pet, no notebook pollution.
     if (!settings.llm?.enabled) {
       await writeLastTick({
-        at: new Date(now).toISOString(),
+        at: localIsoString(now),
         decision: drifted ? 'mood_shift' : 'silent',
       });
       console.log(`[nom][tick] ${reason} · llm off · mood=${drifted?.current ?? 'unchanged'}`);
@@ -239,7 +240,7 @@ export class TickEngine extends EventEmitter {
     moodAfter: Mood;
   }): Promise<void> {
     const { decision, now, moodAfter } = args;
-    const tsIso = new Date(now).toISOString();
+    const tsIso = localIsoString(now);
 
     if (!decision || decision.action === 'silent') {
       await writeLastTick({ at: tsIso, decision: 'silent' });

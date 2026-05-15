@@ -37,6 +37,29 @@ const BUBBLE_FILE = path.join(DIR, 'bubble-count.json');
  * months to reach this volume; revisit when the issue actually appears. */
 export const NOTES_MAX_BYTES = 100 * 1024;
 
+/**
+ * Local-time ISO-8601 string with timezone offset, e.g.
+ * `2026-05-15T12:13:11.786+08:00`. Used in every user-facing
+ * persistence file (pet-mind/*, journal/*) so the human reader can
+ * scan timestamps without doing UTC arithmetic. Still parseable by
+ * `Date.parse()` for downstream code that needs a Date back.
+ *
+ * We deliberately avoid `Date.toISOString()` which always emits `Z`
+ * (UTC), because users open these files in their text editor and ask
+ * "why does the pet think 4 AM is daytime?".
+ */
+export function localIsoString(input: Date | number = Date.now()): string {
+  const d = typeof input === 'number' ? new Date(input) : input;
+  const pad = (n: number, w = 2) => String(n).padStart(w, '0');
+  const offsetMin = -d.getTimezoneOffset();    // east of UTC = positive
+  const sign = offsetMin >= 0 ? '+' : '-';
+  const oh = Math.floor(Math.abs(offsetMin) / 60);
+  const om = Math.abs(offsetMin) % 60;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T` +
+         `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.` +
+         `${pad(d.getMilliseconds(), 3)}${sign}${pad(oh)}:${pad(om)}`;
+}
+
 function ensureDir(): void {
   if (!existsSync(DIR)) mkdirSync(DIR, { recursive: true });
 }
@@ -90,7 +113,7 @@ const VALID_MOODS: Mood[] = ['vivacious', 'normal', 'pensive', 'cranky', 'withdr
 function defaultMoodState(): MoodState {
   return {
     current: 'normal',
-    shiftedAt: new Date().toISOString(),
+    shiftedAt: localIsoString(),
     reason: 'initial',
     recent: [],
   };
@@ -103,7 +126,7 @@ export async function readMood(): Promise<MoodState> {
     const current = VALID_MOODS.includes(parsed.current) ? parsed.current as Mood : 'normal';
     return {
       current,
-      shiftedAt: typeof parsed.shiftedAt === 'string' ? parsed.shiftedAt : new Date().toISOString(),
+      shiftedAt: typeof parsed.shiftedAt === 'string' ? parsed.shiftedAt : localIsoString(),
       reason: typeof parsed.reason === 'string' ? parsed.reason : 'restored',
       recent: Array.isArray(parsed.recent) ? parsed.recent.slice(-20) : [],
     };
@@ -167,7 +190,7 @@ export async function touchAbsence(now: number): Promise<{ gapHours: number }> {
     gapHours = (now - Date.parse(abs.lastActiveAt)) / 3_600_000;
     if (!Number.isFinite(gapHours) || gapHours < 0) gapHours = 0;
   }
-  const nowIso = new Date(now).toISOString();
+  const nowIso = localIsoString(now);
   const nextLongest = !abs.longestGap || gapHours > abs.longestGap.hours
     ? { hours: Math.round(gapHours * 10) / 10, endedAt: nowIso }
     : abs.longestGap;
@@ -251,7 +274,7 @@ export async function incrementBubbleCount(now = Date.now()): Promise<number> {
   const next: BubbleCountFile = {
     date: today,
     count: nextCount,
-    lastAt: new Date(now).toISOString(),
+    lastAt: localIsoString(now),
   };
   try {
     await fs.writeFile(BUBBLE_FILE, JSON.stringify(next, null, 2), 'utf8');

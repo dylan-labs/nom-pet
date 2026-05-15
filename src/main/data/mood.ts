@@ -1,5 +1,5 @@
 import type { Mood, MoodState } from '../../shared/types';
-import { readMood, writeMood } from './pet-mind';
+import { localIsoString, readMood, writeMood } from './pet-mind';
 
 /**
  * Deterministic mood drift. Phase 1 implements pure rule-based shifts —
@@ -125,11 +125,11 @@ export async function maybeDrift(ctx: MoodDriftContext): Promise<MoodState | nul
   const reason = driftReason(ctx, next);
   const updated: MoodState = {
     current: next,
-    shiftedAt: new Date(ctx.now).toISOString(),
+    shiftedAt: localIsoString(ctx.now),
     reason,
     recent: [
       ...cur.recent.slice(-19),
-      { from: cur.current, to: next, at: new Date(ctx.now).toISOString(), reason },
+      { from: cur.current, to: next, at: localIsoString(ctx.now), reason },
     ],
   };
   await writeMood(updated);
