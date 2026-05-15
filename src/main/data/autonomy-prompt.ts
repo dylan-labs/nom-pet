@@ -1,26 +1,38 @@
-import type { Mood, PetMindNote, SoulKernel } from '../../shared/types';
-import type { Observation } from './observation';
+import type { Mood } from '../../shared/types';
 import { moodAdjective } from './mood';
+import type { SituationSnapshot } from './situation';
 
 /**
- * Prompt + parser for the autonomous tick's decision call. The LLM is
- * being asked one question: "given who you are and what just happened,
- * should you do anything right now? If so, what?" — and is strongly
- * biased toward "silent" so the pet feels alive without being noisy.
+ * Prompt + parser for the autonomous tick's decision call. The LLM
+ * receives a raw situational snapshot and is asked a single question:
+ * "given what's actually going on, should you do anything right now?"
  *
- * The decision is returned as a strict JSON envelope; we use the
- * OpenAI-compatible `response_format: { type: 'json_object' }` hint
- * AND prompt-engineer the structure, so endpoints that don't honour
- * the response_format still tend to produce parseable output.
+ * What changed from the v0.0.25 design:
+ *
+ * - We used to hand it a pre-curated list of 3 "observations" with
+ *   pre-phrased Chinese strings ("主人 X 小时没来喂我了"). The model
+ *   could only choose which of MY phrasings to riff on, which made
+ *   the pet sound repetitive AND let rule bugs (like the late-night
+ *   false-positive) launder themselves into LLM-generated text.
+ *
+ * - Now we hand it the raw situation: numbers + qualitative buckets
+ *   + recent self-notes + last-active timestamp + bubble quota. The
+ *   model does the noticing itself. No more rules-pretending-to-be-
+ *   judgment.
+ *
+ * The only pre-processing we keep is the qualitative bucket for token
+ * counts ("吃撑了" / "正经一顿") — both because the spec explicitly
+ * forbids reciting raw numbers AND because handing the model a phrase
+ * it can use directly produces better in-persona output.
  */
 
 export type DecisionAction = 'silent' | 'speak' | 'ask' | 'write_note' | 'shift_mood';
 
 export interface Decision {
   action: DecisionAction;
-  /** Bubble text when action ∈ {speak, ask}. ≤ 25 汉字, validated below. */
+  /** Bubble text when action ∈ {speak, ask}. ≤ 30 汉字, enforced below. */
   content?: string;
-  /** Self-note text when action === 'write_note'. ≤ 80 汉字. */
+  /** Self-note text when action === 'write_note'. ≤ 100 汉字. */
   note?: string;
   /** Target mood when action === 'shift_mood'. */
   newMood?: Mood;
@@ -28,78 +40,58 @@ export interface Decision {
   reason?: string;
 }
 
-export interface DecisionContext {
-  petName: string;
-  soulKernel: SoulKernel | null;
-  mood: Mood;
-  recentNotes: PetMindNote[];
-  observations: Observation[];
-  todayBubbleCount: number;
-  maxBubblesPerDay: number;
-  hoursSinceLastSpoke: number | null;
-  hoursSinceLastActive: number;
-  hour: number;          // 0–23
-}
-
 const VALID_ACTIONS: DecisionAction[] = ['silent', 'speak', 'ask', 'write_note', 'shift_mood'];
 const VALID_MOODS: Mood[] = ['vivacious', 'normal', 'pensive', 'cranky', 'withdrawn'];
 const MAX_CONTENT_CHARS = 30;
 const MAX_NOTE_CHARS = 100;
 
-function timeSlot(hour: number): string {
-  if (hour < 5)  return '凌晨';
-  if (hour < 9)  return '清晨';
-  if (hour < 12) return '上午';
-  if (hour < 14) return '中午';
-  if (hour < 18) return '下午';
-  if (hour < 22) return '傍晚';
-  return '深夜';
-}
-
-function describeBubbleQuota(used: number, cap: number): string {
-  if (cap === 0) return '今天禁言（用户设置：不允许自发说话）';
-  if (used >= cap) return `今天说话额度已用尽（${used}/${cap}）`;
-  if (used === 0) return `今天还没开口（额度 ${cap}）`;
-  return `今天已经说过 ${used}/${cap} 次`;
-}
+// ── Prompt construction ────────────────────────────────────────────────
 
 function describeAbsence(h: number): string {
-  if (h < 1)   return '主人刚刚还在喂我';
-  if (h < 4)   return `主人 ${h.toFixed(1)} 小时没动静`;
-  if (h < 12)  return `主人 ${h.toFixed(0)} 小时没出现`;
-  if (h < 24)  return `主人 ${h.toFixed(0)} 小时没回来了`;
-  return `主人 ${Math.round(h / 24)} 天没出现`;
+  if (!Number.isFinite(h))   return '主人还从来没喂过你（第一次见面）';
+  if (h < 0.5)               return '主人正在喂你';
+  if (h < 1)                 return `主人 ${Math.round(h * 60)} 分钟前刚喂过`;
+  if (h < 4)                 return `主人 ${h.toFixed(1)} 小时前喂过`;
+  if (h < 24)                return `主人 ${h.toFixed(0)} 小时没出现了`;
+  return `主人 ${Math.round(h / 24)} 天没出现了`;
 }
 
-/**
- * Build the system+user messages for the decision LLM call. The
- * system half encodes the persona + decision rules; the user half is
- * a "状态快照" that changes every tick.
- */
-export function buildDecisionMessages(ctx: DecisionContext): { system: string; user: string } {
-  const personality = ctx.soulKernel?.text?.trim()
+function describeBubbleQuota(used: number, cap: number, lastH: number | null): string {
+  if (cap === 0) return '今天用户设置了不允许你自发说话';
+  if (used >= cap) return `今天的说话额度已经用完（${used}/${cap}）—— 这个 tick 必须 silent`;
+  const left = `今天还能再说 ${cap - used} 次`;
+  if (lastH == null) return `今天还没开过口（${left}）`;
+  if (lastH < 1) return `${Math.round(lastH * 60)} 分钟前刚说过话（${left}）—— 别紧跟着再说`;
+  return `${lastH.toFixed(1)} 小时前说过话（${left}）`;
+}
+
+export function buildDecisionMessages(snap: SituationSnapshot): { system: string; user: string } {
+  const personality = snap.soulKernel?.text?.trim()
     || '性格：活泼、贪吃、嘴碎，偶尔记仇。';
 
   const system =
-`你是 ${ctx.petName}，一只住在用户桌面上的虚拟宠物。
+`你是 ${snap.petName}，一只住在用户桌面上的虚拟宠物。
 
 【人格内核】（严格遵守）：
 ${personality}
 
-【今天你的心情】${ctx.mood}（${moodAdjective(ctx.mood)}）
+【今天你的心情】${snap.mood}（${moodAdjective(snap.mood)}）
 
-你现在被叫醒，要决定**接下来要不要做点什么**。绝大多数情况下你应该选择 "silent"。
-- 真正活着的宠物**不会每次想到主人就开口** —— 80% 以上的 tick 应该返回 silent。
-- 只在**真的有事**值得说的时候才说（比如刚刚观察到一件具体的事）。
-- 如果说话，必须**基于下面 user 给出的具体观察**，不要泛泛地"今天累不累"。
-- 不准在 content 里念出具体 token 数字。
+你现在被叫醒，自己看了一眼周围的情况，要决定**接下来要不要做点什么**。
+
+最重要的原则：**默认 silent**。
+- 真正活着的宠物不会每次想到主人就开口 —— 80% 以上的 tick 应该返回 silent。
+- 只有当你**真的看到一件具体的事**值得说时才说。
+- 如果你最近已经说过类似的话（看 user 给你的 recentNotes），别重复。
+- speak 的内容必须基于 user 提供的**具体数据**，不要泛泛地"今天累不累"。
+- **不要念出具体 token 数字** —— 用 user 给的定性描述（"吃撑了"/"正经一顿"等）。
 - 不要 emoji、引号、Markdown、动作描述、"作为 AI"。
-- 自称要符合人格（"哀家" / "本座" / "在下" / "${ctx.petName}" 等都行）。
+- 自称要符合人格（"哀家" / "本座" / "在下" / "${snap.petName}" 等都行）。
 
 【输出格式】必须是合法 JSON，结构如下，不要任何其他文字：
 {
   "action": "silent" | "speak" | "ask" | "write_note" | "shift_mood",
-  "content": "≤ ${MAX_CONTENT_CHARS} 个汉字（speak/ask 必填）",
+  "content": "≤ ${MAX_CONTENT_CHARS} 个汉字（speak / ask 必填）",
   "note":    "≤ ${MAX_NOTE_CHARS} 个汉字（write_note 必填）",
   "newMood": "${VALID_MOODS.join(' | ')}（shift_mood 必填）",
   "reason":  "1 句话简述你为啥这么选（任何 action 都必填）"
@@ -112,47 +104,57 @@ action 的语义：
 - write_note ← 不出声，往自己的小本子上记一笔（≤ ${MAX_NOTE_CHARS} 字），下次 tick 你能看到。
 - shift_mood ← 不出声，把心情切到 newMood。慎用 —— 只在内部状态真的该变了才用。`;
 
-  const obsLines = ctx.observations.slice(0, 3).map((o, i) => `${i + 1}. ${o.data}`).join('\n');
-  const noteLines = ctx.recentNotes.slice(-5).map((n) => `- [${n.kind}] ${n.text}`).join('\n');
+  const milestoneLine = snap.nextMilestone
+    ? snap.nextMilestone.weeksAwayAtCurrentPace != null
+      ? `下一个里程碑 ${snap.nextMilestone.label}：按周均节奏还要约 ${snap.nextMilestone.weeksAwayAtCurrentPace} 周`
+      : `下一个里程碑 ${snap.nextMilestone.label}：用量太少没法预估`
+    : '没有下一个里程碑了（已是最高级）';
+
+  const notesLines = snap.recentNotes.length === 0
+    ? '（你的本子还是空的）'
+    : snap.recentNotes.map((n) => `- [${n.kind}] ${n.text}`).join('\n');
 
   const user =
-`【时间】${timeSlot(ctx.hour)}（${ctx.hour} 点）
-【主人状态】${describeAbsence(ctx.hoursSinceLastActive)}
-【你今天说话情况】${describeBubbleQuota(ctx.todayBubbleCount, ctx.maxBubblesPerDay)}
-${ctx.hoursSinceLastSpoke != null
-  ? `【上次开口】${ctx.hoursSinceLastSpoke.toFixed(1)} 小时前`
-  : '【上次开口】还没开过口'}
+`你睁眼看了一眼周围，下面是你能看到的情况：
 
-【你刚观察到的事（按重要性排）】
-${obsLines || '（这一刻没什么特别值得说的）'}
+【时间】${snap.weekday} ${snap.timeSlot}（${snap.localHour} 点）
+
+【你的胃口】（用这些定性词说话，不准念数字）
+- 累计吃过：${snap.cumulativeQual} · 段位 ${snap.levelBadge}
+- 今天吃了：${snap.todayQual}
+- 昨天吃了：${snap.yesterdayQual}
+- 这周平均一天：${snap.weekAvgQual}
+- ${milestoneLine}
+
+【主人状态】
+- ${describeAbsence(snap.hoursSinceActive)}
+- ${describeBubbleQuota(snap.todayBubbleCount, snap.maxBubblesPerDay, snap.hoursSinceSpoke)}
 
 【你最近写在小本子上的话】
-${noteLines || '（你的本子还是空的）'}
+${notesLines}
 
-请输出 JSON 决策。再次提醒：默认 silent，只在真的有具体事可说时才 speak。/no_think`;
+请**自己看上面这些事**，想想：
+1. 有没有什么真的值得说出来的具体事？（多数情况下：没有）
+2. 你最近说过的话里，有没有跟这次要说的差不多的？（说过就别重复）
+3. 心情和段位是否暗示你该换个调调说话？
+
+输出 JSON 决策。**记得：默认 silent，只有真的有具体事可说时才 speak**。
+
+/no_think`;
 
   return { system, user };
 }
 
-// ── Parsing ────────────────────────────────────────────────────────────
+// ── Parsing (unchanged from v0.0.25; still tolerates fenced output) ────
 
-/**
- * Tolerant JSON extractor. Tries straight parse, then a {...} regex
- * peel for endpoints that wrap output in markdown fences or natural-
- * language preambles ("好的，这是 JSON: {...}"). Returns null on any
- * structural problem — caller treats null as silent.
- */
 function extractJson(raw: string): unknown | null {
   let s = raw.trim();
-  // Some servers wrap response in <think> blocks — strip them.
   const thinkClose = s.lastIndexOf('</think>');
   if (thinkClose >= 0) s = s.slice(thinkClose + '</think>'.length).trim();
-  // Strip markdown code fences if present.
   s = s.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
   try {
     return JSON.parse(s);
   } catch { /* fall through */ }
-  // Last resort: find the first { ... last } and try that.
   const first = s.indexOf('{');
   const last = s.lastIndexOf('}');
   if (first >= 0 && last > first) {
@@ -164,8 +166,6 @@ function extractJson(raw: string): unknown | null {
 }
 
 function trimToChars(s: string, max: number): string {
-  // Length here is JS char count — close enough to "汉字数" for our purposes
-  // since we're not mixing alphabets much in pet dialogue.
   if (s.length <= max) return s;
   return s.slice(0, max - 1).trimEnd() + '…';
 }

@@ -12,32 +12,29 @@ import {
   writeMood,
 } from './pet-mind';
 import { maybeDrift } from './mood';
-import { gatherObservations } from './observation';
-import { decideAutonomousAction } from './llm';
-import type { Decision, DecisionContext } from './autonomy-prompt';
+import { gatherSituation } from './situation';
+import { decideAutonomousAction, generateLine } from './llm';
+import type { Decision } from './autonomy-prompt';
 
 /**
- * The pet's autonomous heartbeat. Phase 1 wired the scaffolding (pet-
- * mind / mood drift / observations). Phase 2 adds the LLM decision
- * step: each tick we ask the language model "given who you are and
- * what just happened, should you do anything?" and either stay silent,
- * speak a bubble, write a private note, or shift mood.
+ * The pet's autonomous heartbeat. Asks the LLM each tick whether it
+ * should speak / write a note / shift mood — and otherwise stays silent.
+ * The model gets a raw situational snapshot (numbers + qualitative
+ * buckets + recent self-notes + activity timeline) and decides for
+ * itself what's noteworthy. No rule-based "observation" pre-curation.
  *
- * The engine emits two kinds of events the main process subscribes to:
- *   - 'bubble' { text, mood, kind, durationMs }   — show in renderer
- *   - 'decision' { action, reason }                — for the Phase-3
- *                                                    transparency widget
+ * Emits two kinds of events:
+ *   - 'bubble'   — pet decided to speak; renderer shows the bubble
+ *   - 'decision' — for the Phase-3 transparency widget
  *
- * Long-absence return reactions go through onActivity (not the tick)
- * so they fire immediately when the user shows back up after being
- * gone — no waiting for the next 30-min tick.
+ * Long-absence return reactions go through `onActivity` (not the tick)
+ * so they fire immediately on user return instead of waiting up to
+ * 30 min for the next scheduled tick.
  */
 
 export interface BubbleEvent {
   text: string;
   mood: Mood;
-  /** What triggered this bubble. Renderer doesn't differentiate yet but
-   * the field is useful for analytics + Phase-3 styling decisions. */
   kind: 'autonomous' | 'return' | 'question';
   durationMs: number;
 }
@@ -57,16 +54,9 @@ export declare interface TickEngine {
   emit<K extends keyof TickEngineEvents>(event: K, ...args: Parameters<TickEngineEvents[K]>): boolean;
 }
 
-const FIRST_TICK_DELAY_MS = 60_000;   // 60 s after start, so launches don't slam
-
-// Long-absence threshold: under 4 h is "normal break"; longer than this
-// triggers the homecoming reaction.
-const RETURN_REACTION_THRESHOLD_HOURS = 4;
-
-// Bubble dwell time (how long a Phase-2 autonomy bubble stays on screen).
-// A touch longer than user-clicked dialogues since these are surprise
-// pop-ups the user wasn't already looking at.
-const BUBBLE_DURATION_MS = 5500;
+const FIRST_TICK_DELAY_MS = 60_000;            // 60 s after start; let launch noise settle
+const RETURN_REACTION_THRESHOLD_HOURS = 4;     // gap before homecoming reaction fires
+const BUBBLE_DURATION_MS = 5500;               // autonomy bubbles linger a touch longer than user-clicked
 
 export class TickEngine extends EventEmitter {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -74,10 +64,9 @@ export class TickEngine extends EventEmitter {
   private running = false;
   /**
    * In-flight onActivity promise — used as a mutex so a burst of token
-   * events (multiple JSONL appends within the same second) doesn't fire
-   * the "homecoming" path multiple times against the same stale
-   * absences.json read. Without serialisation, three concurrent
-   * onActivity calls all see gapHours=14.9 → all append a return note.
+   * events (multiple JSONL appends within the same second) doesn't
+   * fire the "homecoming" path multiple times against the same stale
+   * absences.json read.
    */
   private activityChain: Promise<void> = Promise.resolve();
 
@@ -111,18 +100,16 @@ export class TickEngine extends EventEmitter {
     this.start();
   }
 
+  // ── onActivity (token event hook) ───────────────────────────────────
+
   /**
-   * Called by main on every token event. Updates the absence record so
-   * the next tick can reason about idle time, AND — Phase 2 — fires the
-   * "homecoming" bubble when the user returns after a long gap. The
-   * homecoming path uses the regular LLM dialogue model (NOT the
-   * decision JSON path) because the action is decided here in code; we
-   * only need the language model to produce the line.
+   * Called on every token event. Updates the absence record and — if
+   * the user has been away long enough — fires a homecoming bubble
+   * via the dialogue LLM (NOT the decision LLM; the action is decided
+   * here in code). Serialised via activityChain so bursty events don't
+   * race on absences.json.
    */
   async onActivity(now: number): Promise<void> {
-    // Chain onto whatever previous onActivity invocation is still in
-    // flight so we read absences.json + write back atomically rather
-    // than letting parallel events race.
     const prev = this.activityChain;
     let done!: () => void;
     this.activityChain = new Promise<void>((res) => { done = res; });
@@ -136,11 +123,13 @@ export class TickEngine extends EventEmitter {
 
   private async runActivityInner(now: number): Promise<void> {
     const { gapHours } = await touchAbsence(now);
-    if (gapHours < 1) return; // typical mid-session, no reaction
+    if (gapHours < 1) return; // typical mid-session
 
     const mood = await readMood();
-    // Always log the return into pet-mind so future ticks can cite it.
     if (gapHours >= 4) {
+      // Log the return as a fact, separate from any speaking decision.
+      // This goes in regardless of LLM / autonomy state so the absence
+      // history is always accurate.
       await appendNote({
         ts: new Date(now).toISOString(),
         mood: mood.current,
@@ -149,8 +138,6 @@ export class TickEngine extends EventEmitter {
       });
     }
 
-    // Don't emit a homecoming bubble unless autonomy is on AND we
-    // have an LLM configured AND we still have today's bubble quota.
     const settings = this.store.getSettings();
     if (!settings.autonomy.enabled) return;
     if (!settings.llm?.enabled) return;
@@ -159,25 +146,11 @@ export class TickEngine extends EventEmitter {
     const { count } = await readTodayBubbleCount();
     if (count >= settings.autonomy.maxBubblesPerDay) return;
 
-    // We piggy-back on the decision LLM so the line is in-persona,
-    // mood-tinted, and produced through the same JSON path we already
-    // know works. The observations list is hand-built around "the user
-    // just returned" so the model has something concrete to react to.
-    const ctx: DecisionContext = await this.buildDecisionContext({
-      forcedSpeak: `主人刚刚回来，离开了 ${gapHours.toFixed(1)} 小时。这是一个"回家"瞬间，主人很期待你的反应。`,
-      hour: new Date(now).getHours(),
-      hoursSinceLastActive: gapHours,
-    });
-    // The decision LLM is biased toward silent, but for a return we
-    // *want* speech — so we use generateLine instead, with a "wake"
-    // trigger and the gap baked into the user prompt. The same mood
-    // tint is applied via composeSystemPrompt.
-    const { generateLine } = await import('./llm');
     const line = await generateLine(
       settings.llm,
       {
         trigger: 'wake',
-        hour: ctx.hour,
+        hour: new Date(now).getHours(),
         petName: settings.petName,
         minutesSinceLastFed: Math.round(gapHours * 60),
       },
@@ -196,11 +169,17 @@ export class TickEngine extends EventEmitter {
     });
   }
 
+  // ── tick (scheduled heartbeat) ──────────────────────────────────────
+
   /**
-   * One tick. Drift mood, gather observations, optionally call the
-   * decision LLM, execute whichever action it picked. Returns silently
-   * on any error path — the heartbeat must never crash the main
-   * process, even when the LLM endpoint is broken.
+   * One tick. Drift mood (deterministic), gather the raw situation,
+   * call the decision LLM, execute whatever it chose. On any failure
+   * stay silent — the heartbeat must never crash main.
+   *
+   * When LLM is off (or autonomy is off), we ONLY drift mood + record
+   * lastTick. We DO NOT write any rule-based "observation" note —
+   * those notes turned out to be the source of fabricated facts the
+   * LLM later cited as truth (see late-night bug, v0.0.25).
    */
   private async tick(reason: string): Promise<void> {
     const settings = this.store.getSettings();
@@ -211,124 +190,58 @@ export class TickEngine extends EventEmitter {
 
     const now = Date.now();
     const snap = this.store.snapshot();
-    const { gapHours: rawGap } = await touchAbsenceReadOnly(now);
-    const idleMinutes = Number.isFinite(rawGap) ? rawGap * 60 : Number.POSITIVE_INFINITY;
-    const hoursSinceLastActive = Number.isFinite(rawGap) ? rawGap : 9999;
+    const { gapHours } = await peekAbsenceGap(now);
+    const idleMinutes = Number.isFinite(gapHours) ? gapHours * 60 : Number.POSITIVE_INFINITY;
 
-    // Phase 1 mechanic — mood drift remains rule-based.
+    // Mood drift remains rule-based; this is the pet's "biological"
+    // rhythm and the rules are honest about what they're based on.
     const drifted = await maybeDrift({
       now,
       idleMinutes,
       todayTokens: snap.today,
     });
 
-    const observations = await gatherObservations(this.store);
-
-    // Without LLM we degrade to Phase-1 behaviour: just record an
-    // observation note and exit silently.
+    // No LLM → tick is mood-drift-only. Quiet pet, no notebook pollution.
     if (!settings.llm?.enabled) {
-      await this.recordObservationNote(observations, drifted?.current);
       await writeLastTick({
         at: new Date(now).toISOString(),
-        decision: drifted ? 'mood_shift' : (observations[0] ? 'observation' : 'silent'),
+        decision: drifted ? 'mood_shift' : 'silent',
       });
-      console.log(`[nom][tick] ${reason} · llm off · obs=${observations[0]?.kind ?? 'none'}`);
+      console.log(`[nom][tick] ${reason} · llm off · mood=${drifted?.current ?? 'unchanged'}`);
       return;
     }
 
-    // Hard rate limit before we even call the LLM.
-    const { count: todayBubbleCount, lastAt } = await readTodayBubbleCount();
-    const hoursSinceLastSpoke = lastAt
-      ? (now - Date.parse(lastAt)) / 3_600_000
-      : null;
+    const situation = await gatherSituation(this.store);
+    // Mood may have just drifted; reflect it in the situation we send.
+    if (drifted) situation.mood = drifted.current;
 
-    const decisionCtx: DecisionContext = await this.buildDecisionContext({
-      hour: new Date(now).getHours(),
-      hoursSinceLastActive,
-      hoursSinceLastSpoke,
-      todayBubbleCount,
-      // If quota is gone, force the decision toward silent by saying so
-      // explicitly in the prompt. Even if the model still tries to
-      // speak, we'll filter it out below.
-      observationsOverride: observations,
-    });
+    const decision = await decideAutonomousAction(settings.llm, situation);
 
-    const decision = await decideAutonomousAction(settings.llm, decisionCtx);
     await this.executeDecision({
       decision,
       now,
-      drifted,
-      observations,
-      todayBubbleCount,
-      maxBubbles: settings.autonomy.maxBubblesPerDay,
+      moodAfter: situation.mood,
     });
     console.log(
-      `[nom][tick] ${reason} · mood=${drifted?.current ?? 'unchanged'}` +
+      `[nom][tick] ${reason}` +
+      ` · mood=${drifted?.current ?? 'unchanged'}` +
       ` · decision=${decision?.action ?? 'parse-fail'}` +
       ` · today=${snap.today}` +
       ` · day=${todayKey()}`
     );
   }
 
-  // ── Phase 2 helpers ───────────────────────────────────────────────
-
-  private async buildDecisionContext(extra: {
-    hour: number;
-    hoursSinceLastActive: number;
-    hoursSinceLastSpoke?: number | null;
-    todayBubbleCount?: number;
-    forcedSpeak?: string;
-    observationsOverride?: Awaited<ReturnType<typeof gatherObservations>>;
-  }): Promise<DecisionContext> {
-    const settings = this.store.getSettings();
-    const mood = await readMood();
-    const [observations, recentNotes] = await Promise.all([
-      extra.observationsOverride
-        ? Promise.resolve(extra.observationsOverride)
-        : gatherObservations(this.store),
-      (await import('./pet-mind')).readRecentNotes(5),
-    ]);
-    const bubble = extra.todayBubbleCount != null
-      ? { count: extra.todayBubbleCount, lastAt: null }
-      : await readTodayBubbleCount();
-    const hoursSinceLastSpoke = extra.hoursSinceLastSpoke
-      ?? (bubble.lastAt
-        ? (Date.now() - Date.parse(bubble.lastAt)) / 3_600_000
-        : null);
-    const obsForCtx = extra.forcedSpeak
-      ? [{ kind: 'idle-gap' as const, significance: 1, data: extra.forcedSpeak }, ...observations]
-      : observations;
-    return {
-      petName: settings.petName,
-      soulKernel: settings.soulKernel,
-      mood: mood.current,
-      recentNotes,
-      observations: obsForCtx,
-      todayBubbleCount: bubble.count,
-      maxBubblesPerDay: settings.autonomy.maxBubblesPerDay,
-      hoursSinceLastSpoke,
-      hoursSinceLastActive: extra.hoursSinceLastActive,
-      hour: extra.hour,
-    };
-  }
+  // ── Decision execution ─────────────────────────────────────────────
 
   private async executeDecision(args: {
     decision: Decision | null;
     now: number;
-    drifted: { current: Mood } | null;
-    observations: Awaited<ReturnType<typeof gatherObservations>>;
-    todayBubbleCount: number;
-    maxBubbles: number;
+    moodAfter: Mood;
   }): Promise<void> {
-    const { decision, now, drifted, observations, todayBubbleCount, maxBubbles } = args;
-    const baseMood = (drifted?.current ?? (await readMood()).current) as Mood;
+    const { decision, now, moodAfter } = args;
     const tsIso = new Date(now).toISOString();
 
-    // Null = LLM failed / parse failed / silent. Fall through to the
-    // Phase-1 observation note so the tick still leaves a trace.
     if (!decision || decision.action === 'silent') {
-      await this.recordObservationNote(observations, baseMood);
-      // Always 'silent' here — narrowing's just being shy.
       await writeLastTick({ at: tsIso, decision: 'silent' });
       this.emit('decision', { action: 'silent', reason: decision?.reason ?? 'no-decision' });
       return;
@@ -338,22 +251,23 @@ export class TickEngine extends EventEmitter {
       case 'speak':
       case 'ask': {
         if (!decision.content) return;
-        if (todayBubbleCount >= maxBubbles) {
-          // Quota exceeded — demote to a private note so the work
-          // wasn't wasted and the LLM's good observation still lives
-          // somewhere.
-          await appendNote({ ts: tsIso, mood: baseMood, kind: 'opinion', text: decision.content });
+        const settings = this.store.getSettings();
+        const { count } = await readTodayBubbleCount();
+        if (count >= settings.autonomy.maxBubblesPerDay) {
+          // Out of speak quota — demote to a private note so the
+          // model's good observation isn't wasted.
+          await appendNote({ ts: tsIso, mood: moodAfter, kind: 'opinion', text: decision.content });
           await writeLastTick({ at: tsIso, decision: 'note' });
           this.emit('decision', { action: 'silent', reason: 'quota-exceeded' });
           return;
         }
         const newCount = await incrementBubbleCount(now);
-        await appendNote({ ts: tsIso, mood: baseMood, kind: 'opinion', text: decision.content });
+        await appendNote({ ts: tsIso, mood: moodAfter, kind: 'opinion', text: decision.content });
         await writeLastTick({ at: tsIso, decision: decision.action });
-        console.log(`[nom][tick] ${decision.action} (${newCount}/${maxBubbles}): ${decision.content}`);
+        console.log(`[nom][tick] ${decision.action} (${newCount}/${settings.autonomy.maxBubblesPerDay}): ${decision.content}`);
         this.emit('bubble', {
           text: decision.content,
-          mood: baseMood,
+          mood: moodAfter,
           kind: decision.action === 'ask' ? 'question' : 'autonomous',
           durationMs: BUBBLE_DURATION_MS,
         });
@@ -362,19 +276,20 @@ export class TickEngine extends EventEmitter {
       }
       case 'write_note': {
         if (!decision.note) return;
-        await appendNote({ ts: tsIso, mood: baseMood, kind: 'opinion', text: decision.note });
+        await appendNote({ ts: tsIso, mood: moodAfter, kind: 'opinion', text: decision.note });
         await writeLastTick({ at: tsIso, decision: 'note' });
         this.emit('decision', { action: 'write_note', reason: decision.reason ?? '' });
         return;
       }
       case 'shift_mood': {
-        if (!decision.newMood || decision.newMood === baseMood) return;
+        if (!decision.newMood || decision.newMood === moodAfter) return;
+        const cur = await readMood();
         const updated = {
           current: decision.newMood,
           shiftedAt: tsIso,
           reason: decision.reason ?? 'LLM-decided shift',
-          recent: (await readMood()).recent.concat({
-            from: baseMood,
+          recent: cur.recent.concat({
+            from: moodAfter,
             to: decision.newMood,
             at: tsIso,
             reason: decision.reason ?? 'LLM-decided shift',
@@ -387,33 +302,19 @@ export class TickEngine extends EventEmitter {
       }
     }
   }
-
-  /** Phase-1 fallback: write a single observation note, no LLM. */
-  private async recordObservationNote(
-    observations: Awaited<ReturnType<typeof gatherObservations>>,
-    moodOverride?: Mood,
-  ): Promise<void> {
-    if (observations.length === 0) return;
-    const top = observations[0]!;
-    const mood = moodOverride ?? (await readMood()).current;
-    await appendNote({
-      ts: new Date().toISOString(),
-      mood,
-      kind: 'observation',
-      text: top.data,
-    });
-  }
 }
 
+// ── Helpers ────────────────────────────────────────────────────────────
+
 /**
- * Internal helper: same as touchAbsence but doesn't write back — used
- * inside the tick to peek at the current gap without bumping the
- * lastActiveAt stamp (only onActivity should bump it, since "the tick
- * happened" doesn't count as the user showing up).
+ * Read-only peek at the absence gap. Used inside the tick so we can
+ * reason about idle minutes without bumping lastActiveAt (only real
+ * token activity should bump that — the tick is the pet thinking, not
+ * the user showing up).
  */
-async function touchAbsenceReadOnly(now: number): Promise<{ gapHours: number }> {
+async function peekAbsenceGap(now: number): Promise<{ gapHours: number }> {
   const abs = await readAbsence();
   if (!abs.lastActiveAt) return { gapHours: Infinity };
-  const gapHours = (now - Date.parse(abs.lastActiveAt)) / 3_600_000;
-  return { gapHours: Number.isFinite(gapHours) && gapHours >= 0 ? gapHours : 0 };
+  const h = (now - Date.parse(abs.lastActiveAt)) / 3_600_000;
+  return { gapHours: Number.isFinite(h) && h >= 0 ? h : 0 };
 }

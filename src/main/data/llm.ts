@@ -1,6 +1,7 @@
 import type { DialogueContext, JournalDailyMetadata, LlmSettings, Mood, SoulKernel } from '../../shared/types';
 import { composeSystemPrompt } from './soul';
-import { buildDecisionMessages, parseDecision, type Decision, type DecisionContext } from './autonomy-prompt';
+import { buildDecisionMessages, parseDecision, type Decision } from './autonomy-prompt';
+import type { SituationSnapshot } from './situation';
 
 const REQUEST_TIMEOUT_MS = 20000;
 // Journals are longer (80-200 char prose) and thinking models may need
@@ -454,14 +455,14 @@ const DECISION_TIMEOUT_MS = 45_000;
 
 export async function decideAutonomousAction(
   settings: LlmSettings,
-  ctx: DecisionContext,
+  situation: SituationSnapshot,
 ): Promise<Decision | null> {
   if (!settings.enabled || !settings.endpoint || !settings.model) return null;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DECISION_TIMEOUT_MS);
 
-  const { system, user } = buildDecisionMessages(ctx);
+  const { system, user } = buildDecisionMessages(situation);
 
   try {
     const res = await fetch(settings.endpoint, {
